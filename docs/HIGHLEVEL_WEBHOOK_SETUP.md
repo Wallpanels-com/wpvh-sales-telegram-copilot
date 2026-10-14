@@ -17,7 +17,7 @@ In each sub-account (WallPanels and Verona Home):
 4. URL:
 
 ```
-https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/customer-replied?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/customer-replied?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}&eventId={{contact.id}}-{{right_now.year}}{{right_now.month}}{{right_now.day}}{{right_now.hour}}{{right_now.minute}}{{right_now.second}}
 ```
 
 If HighLevel exposes conversation/message IDs as workflow custom values in that location, append them as query parameters too. They are optional because the bot can resolve the latest conversation from `contactId` using read-only API calls.
@@ -33,10 +33,10 @@ Create another workflow:
 3. URL:
 
 ```
-https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/transcript-generated?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/transcript-generated?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}&eventId={{contact.id}}-{{right_now.year}}{{right_now.month}}{{right_now.day}}{{right_now.hour}}{{right_now.minute}}{{right_now.second}}
 ```
 
-If the trigger exposes a message/call ID custom value, append it as `messageId=...`. If it exposes the full transcript, it can be included in the webhook payload; otherwise the bot uses the read-only HighLevel transcription endpoint once the call message ID is known.
+The backend resolves the newest Call message for the contact, then loads the full transcript through HighLevel's read-only transcription endpoint. Do not put the full transcript in the URL. If the standard Webhook action includes it in the POST body, the backend can use that payload as a fallback.
 
 ## 3. Optional Task Reminder
 

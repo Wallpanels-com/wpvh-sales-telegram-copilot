@@ -76,7 +76,11 @@ export class ContextService {
     }
     if (!triggerMessage) triggerMessage = [...recentMessages].reverse().find((m) => m.direction === 'inbound');
 
-    const assignedGhlUserId = opportunity?.assignedTo ?? conversation?.assignedTo ?? undefined;
+    const assignedGhlUserId = opportunity?.assignedTo
+      ?? conversation?.assignedTo
+      ?? contact?.assignedTo
+      ?? contact?.assignedUserId
+      ?? undefined;
     const [pipelineContext, assignedSales] = await Promise.all([
       this.ghl.resolvePipelineContext(brand, opportunity?.pipelineId, opportunity?.pipelineStageId),
       assignedGhlUserId ? this.db.getSalesByGhlUserId(brand, assignedGhlUserId) : Promise.resolve(null)

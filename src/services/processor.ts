@@ -155,13 +155,13 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     const locationId = this.ghl.locationId(brand);
     let contactId = n.contactId;
-    const messageId = n.messageId;
+    const inputMessageId = n.messageId;
     let transcript = n.transcript;
     let callMessage: GhlMessage | null = null;
 
-    if (messageId) {
+    if (inputMessageId) {
       try {
-        callMessage = await this.ghl.getMessage(brand, messageId);
+        callMessage = await this.ghl.getMessage(brand, inputMessageId);
         contactId ||= callMessage?.contactId;
       } catch {
         // continue; webhook may carry contact id
@@ -169,8 +169,10 @@ export class EventProcessor {
     }
     if (!contactId) throw new Error('transcript event has no contactId');
 
-    const context = await this.contextService.build({ brand, contactId, conversationId: callMessage?.conversationId, messageId });
+    const context = await this.contextService.build({ brand, contactId, conversationId: callMessage?.conversationId, messageId: inputMessageId });
     if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'transcript', context.contactId)) return;
+    callMessage ??= [...context.recentMessages].reverse().find(isCallMessage) ?? null;
+    const messageId = inputMessageId ?? callMessage?.id;
 
     const analysisMessageId = messageId ?? n.eventKey;
     const processedKey = `transcript:${analysisMessageId}`;
@@ -228,7 +230,7 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('task reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
-    const assignedGhlUserId = n.assignedUserId ?? context.assignedGhlUserId;
+    const assignedGhlUserId = context.assignedGhlUserId;
     if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'task reminder', context.contactId)) return;
     const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
     const taskTitle = n.taskTitle ?? context.openTasks[0]?.title ?? 'Task due';
@@ -256,7 +258,7 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('appointment reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
-    const assignedGhlUserId = n.assignedUserId ?? context.assignedGhlUserId;
+    const assignedGhlUserId = context.assignedGhlUserId;
     if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'appointment reminder', context.contactId)) return;
     const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
     const brief = [context.relationshipSummary, context.lastCallSummary].filter(Boolean).join(' ');
@@ -401,6 +403,11 @@ function flattenTranscript(raw: any): string {
   if (typeof raw.transcript === 'string') return raw.transcript;
   if (typeof raw.transcription === 'string') return raw.transcription;
   return '';
+}
+
+function isCallMessage(message: GhlMessage): boolean {
+  const type = String(message.messageType ?? '').toUpperCase();
+  return type === 'CALL' || type.includes('TYPE_CALL');
 }
 
 function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
