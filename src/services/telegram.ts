@@ -1,5 +1,7 @@
 import type { AppConfig } from '../config.js';
 
+type TelegramConfig = Pick<AppConfig, 'TELEGRAM_BOT_TOKEN' | 'TELEGRAM_WEBHOOK_SECRET'>;
+
 export type InlineButton =
   | { text: string; callback_data: string }
   | { text: string; url: string }
@@ -8,12 +10,16 @@ export type InlineButton =
 export class TelegramClient {
   private readonly baseUrl: string;
 
-  constructor(private readonly config: AppConfig) {
+  constructor(private readonly config: TelegramConfig) {
     this.baseUrl = `https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}`;
   }
 
   async getMe(): Promise<any> {
     return this.call('getMe', {});
+  }
+
+  async getWebhookInfo(): Promise<any> {
+    return this.call('getWebhookInfo', {});
   }
 
   async sendMessage(input: {
