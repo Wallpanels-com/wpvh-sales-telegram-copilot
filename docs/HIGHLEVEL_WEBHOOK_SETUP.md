@@ -1,0 +1,63 @@
+# HighLevel webhook setup
+
+The bot works in two modes:
+
+1. **Webhook mode (recommended)** — near real-time and minimal API usage.
+2. **Read-only polling fallback** — enabled by default so the bot can still detect inbound messages/calls before workflows are configured.
+
+Both modes deduplicate by HighLevel message/transcript ID.
+
+## 1. Customer Replied
+
+In each sub-account (WallPanels and Verona Home):
+
+1. Automation → Workflows → Create workflow.
+2. Trigger: **Customer Replied**.
+3. Add the standard **Webhook** action (POST).
+4. URL:
+
+```
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/customer-replied?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+```
+
+If HighLevel exposes conversation/message IDs as workflow custom values in that location, append them as query parameters too. They are optional because the bot can resolve the latest conversation from `contactId` using read-only API calls.
+
+Do not use Custom Webhook unless you specifically need custom headers/body/auth; the standard Webhook action is enough for this bot.
+
+## 2. Transcript Generated
+
+Create another workflow:
+
+1. Trigger: **Transcript Generated**.
+2. Standard Webhook action (POST).
+3. URL:
+
+```
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/transcript-generated?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+```
+
+If the trigger exposes a message/call ID custom value, append it as `messageId=...`. If it exposes the full transcript, it can be included in the webhook payload; otherwise the bot uses the read-only HighLevel transcription endpoint once the call message ID is known.
+
+## 3. Optional Task Reminder
+
+For a HighLevel Task Reminder workflow, POST to:
+
+```
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/task-reminder?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+```
+
+The bot also builds a daily task briefing from read-only Opportunity data, so this webhook is optional.
+
+## 4. Optional appointment preparation reminder
+
+Create a workflow that runs before the appointment (for example 1 hour before) and POST to:
+
+```
+https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/appointment-reminder?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
+```
+
+HighLevel should continue sending any client-facing appointment SMS itself. This endpoint is for the internal Sales briefing only.
+
+## Safety
+
+The supplied project contains **no HighLevel write method**. All HighLevel HTTP calls in `src/services/ghl.ts` are GET requests.

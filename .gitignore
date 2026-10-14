@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.neon/
+.ssh/
+id_ed25519*
+.DS_Store
+coverage/
+*.docx
+*ACCESS*.docx
+*KEYS*.docx

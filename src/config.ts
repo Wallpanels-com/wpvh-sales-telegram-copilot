@@ -1,0 +1,83 @@
+import { config as loadDotenv } from 'dotenv';
+import { z } from 'zod';
+
+loadDotenv({ path: ['.env.local', '.env'], quiet: true });
+
+const boolFromEnv = z.preprocess((v) => {
+  if (typeof v === 'boolean') return v;
+  if (typeof v !== 'string') return v;
+  return ['1', 'true', 'yes', 'on'].includes(v.toLowerCase());
+}, z.boolean());
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
+  PORT: z.coerce.number().int().positive().default(3000),
+  PUBLIC_BASE_URL: z.string().url().optional().or(z.literal('')),
+  LOG_LEVEL: z.string().default('info'),
+
+  DATABASE_URL: z.string().min(1),
+
+  TELEGRAM_BOT_TOKEN: z.string().min(1),
+  TELEGRAM_BOT_USERNAME: z.string().optional().default(''),
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(16),
+  ADMIN_TELEGRAM_USER_IDS: z.string().default(''),
+  SALES_MAPPINGS_JSON: z.string().default('[]'),
+
+  AI_PROVIDER: z.enum(['openai', 'openai-compatible']).default('openai'),
+  AI_API_KEY: z.string().optional().default(''),
+  AI_MODEL: z.string().optional().default(''),
+  AI_BASE_URL: z.string().url().optional().or(z.literal('')),
+  // Backward-compatible aliases for the original deployment contract.
+  OPENAI_API_KEY: z.string().optional().default(''),
+  OPENAI_MODEL: z.string().optional().default(''),
+  AI_REPLY_MAX_CHARS: z.coerce.number().int().min(80).max(1000).default(240),
+
+  GHL_WP_LOCATION_ID: z.string().min(1),
+  GHL_WP_TOKEN: z.string().min(1),
+  GHL_VH_LOCATION_ID: z.string().min(1),
+  GHL_VH_TOKEN: z.string().min(1),
+  GHL_WEBHOOK_SHARED_SECRET: z.string().min(16),
+
+  TIMEZONE: z.string().default('America/New_York'),
+  WORK_START: z.string().regex(/^\d{2}:\d{2}$/).default('08:45'),
+  WORK_END: z.string().regex(/^\d{2}:\d{2}$/).default('20:00'),
+  WORK_DAYS: z.string().default('1,2,3,4,5,6'),
+  DAILY_BRIEF_TIME: z.string().regex(/^\d{2}:\d{2}$/).default('08:45'),
+
+  POLLING_ENABLED: boolFromEnv.default(true),
+  POLLING_INTERVAL_SECONDS: z.coerce.number().int().min(30).max(900).default(60),
+  POLLING_CHANNELS: z.string().default('SMS,Email,WhatsApp,Instagram,Facebook,Call'),
+  POLLING_LOOKBACK_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
+  MAX_OPPORTUNITY_PAGES_PER_SALES: z.coerce.number().int().min(1).max(20).default(5),
+
+  GHL_API_BASE: z.string().url().default('https://services.leadconnectorhq.com'),
+  GHL_API_VERSION: z.string().default('v3'),
+  GHL_CONTACT_URL_TEMPLATE: z.string().default('https://app.gohighlevel.com/v2/location/{locationId}/contacts/detail/{contactId}')
+});
+
+export type AppConfig = z.infer<typeof envSchema> & {
+  adminTelegramUserIds: string[];
+  workDays: Set<number>;
+  pollingChannels: string[];
+  aiApiKey: string;
+  aiModel: string;
+  aiBaseUrl?: string;
+};
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const parsed = envSchema.parse(env);
+  const aiApiKey = parsed.AI_API_KEY || parsed.OPENAI_API_KEY;
+  const aiModel = parsed.AI_MODEL || parsed.OPENAI_MODEL || 'gpt-5.6-luna';
+  if (parsed.AI_PROVIDER === 'openai-compatible' && !parsed.AI_BASE_URL) {
+    throw new Error('AI_BASE_URL is required when AI_PROVIDER=openai-compatible');
+  }
+  return {
+    ...parsed,
+    adminTelegramUserIds: parsed.ADMIN_TELEGRAM_USER_IDS.split(',').map((x) => x.trim()).filter(Boolean),
+    workDays: new Set(parsed.WORK_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x >= 1 && x <= 7)),
+    pollingChannels: parsed.POLLING_CHANNELS.split(',').map((x) => x.trim()).filter(Boolean),
+    aiApiKey,
+    aiModel,
+    aiBaseUrl: parsed.AI_BASE_URL || undefined
+  };
+}

@@ -1,0 +1,343 @@
+PROJECT: WP/VH AI SALES TELEGRAM COPILOT
+
+Я передаю тебе ZIP-архив с готовой кодовой базой `wpvh-sales-telegram-copilot` и локальный Word-документ с доступами/ID.
+
+ЦЕЛЬ:
+довести этот код до production, подключить корпоративные ресурсы, запушить в НОВЫЙ корпоративный GitHub repo, подключить Neon, задеплоить на Railway и настроить Telegram webhook.
+
+ВАЖНО: НЕ ПЕРЕПИСЫВАЙ ПРОЕКТ С НУЛЯ. Сначала распакуй и изучи предоставленный код, потом исправляй только реальные проблемы.
+
+==================================================
+1. ЛОКАЛЬНЫЙ ДОКУМЕНТ С ДОСТУПАМИ
+==================================================
+
+Найди локальный Word-файл с доступами. Ожидаемое имя:
+`WPVH_SALES_COPILOT_ACCESS.docx`
+
+Он может лежать в папке проекта или на Desktop.
+
+Из него возьми:
+- corporate GitHub repo HTTPS/SSH
+- Neon DATABASE_URL
+- Telegram bot token + username
+- Telegram numeric user_id Дмитрия
+- Telegram numeric user_id Kate / AstraGlo
+- Telegram numeric user_id каждого sales
+- OpenAI API key
+- OpenAI model (если указан)
+- WallPanels Location ID
+- WallPanels READ-ONLY Private Integration Token
+- Verona Home Location ID
+- Verona Home READ-ONLY Private Integration Token
+- GHL User ID каждого sales для WallPanels / Verona
+- рабочее время / timezone
+
+НИКОГДА:
+- не коммить этот DOCX
+- не копируй его в repo
+- не печатай секреты в ответе/логах
+- не сохраняй секреты в README/source code
+
+`.gitignore` уже блокирует DOCX/ACCESS/KEYS, проверь это.
+
+==================================================
+2. NEON
+==================================================
+
+Используем NEON, НЕ Supabase.
+
+Нужен `DATABASE_URL`.
+
+Проверь migrations и подключение через `@neondatabase/serverless`.
+Запусти migrations на новом Neon проекте.
+Не удаляй чужие таблицы и не работай с другими БД.
+
+==================================================
+3. HIGHLEVEL — АБСОЛЮТНЫЙ READ-ONLY
+==================================================
+
+HighLevel остаётся CRM/source of truth.
+
+Токены имеют права чтения.
+
+СТРОГО ЗАПРЕЩЕНО:
+- отправлять SMS/Email/WhatsApp
+- создавать/закрывать Tasks
+- менять Contacts
+- менять Opportunities/Stages
+- создавать Notes
+- менять Tags/Custom Fields
+- менять Appointments
+- делать любые POST/PATCH/PUT/DELETE в HighLevel
+
+Разрешены только GET/read запросы.
+
+Проверь весь `src/services/ghl.ts`: в production коде не должно быть ни одного HighLevel write endpoint.
+
+НЕ делай тестовые сообщения реальным клиентам.
+
+==================================================
+4. ПРОВЕРЬ АКТУАЛЬНЫЕ API
+==================================================
+
+Перед deploy проверь официальную документацию:
+- HighLevel API
+- Telegram Bot API
+- OpenAI API
+- Neon
+
+Если API/SDK изменился — минимально поправь предоставленный код.
+Не придумывай endpoint.
+
+Особенно проверь:
+- HighLevel Contacts GET
+- Opportunity search + getTasks/getCalendarEvents
+- Conversations search/messages
+- Messages export polling fallback
+- Call transcription GET
+- Telegram copy_text button
+- OpenAI Responses API
+
+==================================================
+5. SALES ROUTING
+==================================================
+
+Критическая логика:
+
+Дмитрий + Kate/AstraGlo
+→ получают ВСЕ релевантные события.
+
+Каждый Sales
+→ получает ТОЛЬКО события клиентов/Opportunity, где HighLevel assigned user совпадает с его GHL User ID для конкретного Location.
+
+Mapping:
+Telegram Sales user_id ↔ WallPanels GHL User ID ↔ Verona GHL User ID.
+
+Если lead unassigned или mapping не найден:
+→ только admins.
+
+Не отправляй чужие lead events другому sales.
+
+==================================================
+6. SALES MAPPINGS
+==================================================
+
+Собери `SALES_MAPPINGS_JSON` из Word-документа.
+Сохрани его только как Railway ENV.
+
+После migrations запусти:
+`npm run seed:sales`
+
+Проверь записи в Neon без изменения HighLevel.
+
+==================================================
+7. OPENAI
+==================================================
+
+Используй OpenAI API key только server-side.
+
+AI должен:
+- учитывать последние meaningful сообщения
+- отличать автоматические workflow/campaign outbound от ручного ответа Sales
+- учитывать Stage, Tasks и call memory
+- не выдумывать цену, сроки, availability, встречи и обещания
+- Suggested Reply писать на языке клиента
+- summary/why/next action можно делать на русском
+- не отправлять Suggested Reply клиенту
+
+Кнопки:
+- Copy reply
+- Shorter
+- Friendlier
+- Rewrite
+- Open in GHL
+
+Shorter/Friendlier/Rewrite должны реально использовать AI, не string hacks.
+
+==================================================
+8. TELEGRAM
+==================================================
+
+После Railway deploy:
+- получи PUBLIC_BASE_URL
+- установи `PUBLIC_BASE_URL` в Railway ENV
+- выполни `npm run telegram:set-webhook`
+- настрой команды `/today`, `/status`, `/help`
+
+Telegram webhook должен быть защищён `TELEGRAM_WEBHOOK_SECRET`.
+Если секрет не предоставлен — сгенерируй криптографически случайный сильный secret и положи ТОЛЬКО в Railway ENV.
+
+Проверяй Telegram только через аккаунт Дмитрия.
+НЕ отправляй тестовые карточки Kate или sales без явной необходимости.
+
+==================================================
+9. GHL WEBHOOKS + POLLING FALLBACK
+==================================================
+
+Код уже поддерживает два режима:
+
+A) HighLevel Webhooks — основной real-time путь.
+B) READ-ONLY polling — fallback, чтобы бот работал даже до ручной настройки workflow webhooks.
+
+Оставь `POLLING_ENABLED=true` на первом deploy.
+
+Polling не должен сканировать всю историю CRM.
+Он должен брать только свежие сообщения с небольшим overlap и dedupe в Neon.
+
+После deploy дай Дмитрию точные URL:
+
+`{PUBLIC_BASE_URL}/webhooks/highlevel/customer-replied?secret=...&locationId={{location.id}}&contactId={{contact.id}}`
+
+`{PUBLIC_BASE_URL}/webhooks/highlevel/transcript-generated?secret=...&locationId={{location.id}}&contactId={{contact.id}}`
+
+Также optional:
+- `/webhooks/highlevel/task-reminder`
+- `/webhooks/highlevel/appointment-reminder`
+
+`GHL_WEBHOOK_SHARED_SECRET` сгенерируй, если его нет, и сохрани ТОЛЬКО в Railway ENV.
+
+Не пытайся создавать/редактировать HighLevel workflows через read-only API или внутренние undocumented API.
+Если у тебя нет разрешённого GUI-доступа — просто дай Дмитрию готовые URL и точные шаги из `docs/HIGHLEVEL_WEBHOOK_SETUP.md`.
+
+==================================================
+10. WORK HOURS
+==================================================
+
+Используй настройки из Word.
+Если там нет значений:
+TIMEZONE=America/New_York
+WORK_START=08:45
+WORK_END=20:00
+WORK_DAYS=1,2,3,4,5,6
+DAILY_BRIEF_TIME=08:45
+
+Вне рабочего времени event сохраняется, Telegram notification откладывается до следующего рабочего старта.
+
+==================================================
+11. ФУНКЦИИ MVP
+==================================================
+
+Должно работать:
+
+1. New client reply → Telegram
+2. AI Suggested Reply
+3. Copy / Shorter / Friendlier / Rewrite / Open in GHL
+4. admins получают всё, assigned sales только своё
+5. `/today` → Tasks + meetings
+6. daily briefing
+7. transcript → AI call summary
+8. call summary сохраняется в Neon memory
+9. следующий AI reply учитывает прошлый call summary
+10. работа только в рабочем окне
+11. webhook deduplication
+12. polling fallback без дублей
+13. `/health` и `/ready`
+
+==================================================
+12. GITHUB
+==================================================
+
+Используй НОВЫЙ корпоративный repo из Word.
+
+НЕ трогай личные репозитории Дмитрия.
+НЕ трогай старый portal repo.
+НЕ трогай старый SLA-bot repo.
+
+Перед commit:
+- npm install
+- npm run typecheck
+- npm test
+- npm run build
+
+Исправь все реальные ошибки.
+
+Commit и push в новый corporate repo.
+Сделай логичные commit message(s).
+
+==================================================
+13. RAILWAY
+==================================================
+
+Создай/используй НОВЫЙ корпоративный Railway service для этого repo.
+Подключи GitHub repo.
+
+Railway ENV — только server-side secrets.
+
+Минимум:
+DATABASE_URL
+TELEGRAM_BOT_TOKEN
+TELEGRAM_BOT_USERNAME
+TELEGRAM_WEBHOOK_SECRET
+ADMIN_TELEGRAM_USER_IDS
+SALES_MAPPINGS_JSON
+OPENAI_API_KEY
+OPENAI_MODEL
+GHL_WP_LOCATION_ID
+GHL_WP_TOKEN
+GHL_VH_LOCATION_ID
+GHL_VH_TOKEN
+GHL_WEBHOOK_SHARED_SECRET
+TIMEZONE
+WORK_START
+WORK_END
+WORK_DAYS
+DAILY_BRIEF_TIME
+POLLING_ENABLED
+PUBLIC_BASE_URL
+
+Деплой.
+Проверь `/health` и `/ready`.
+
+==================================================
+14. ТЕСТИРОВАНИЕ
+==================================================
+
+Можно:
+- lint/typecheck/build/tests
+- Neon migrations
+- Telegram getMe/setWebhook/setMyCommands
+- mock webhook payload
+- read-only HighLevel GET
+- Telegram тесты ТОЛЬКО на Дмитрии
+
+Нельзя:
+- HighLevel CRM writes
+- отправка клиенту
+- тестовые SMS/email
+- изменение Task/Opportunity/Contact/Stage
+
+Сначала тестируй routing на mock payload.
+Убедись, что sales не получает чужого lead.
+
+==================================================
+15. НЕ ЛОМАЙ СУЩЕСТВУЮЩИЕ GHL WORKFLOWS
+==================================================
+
+Новый бот сейчас только читает и помогает Sales.
+Не отключай и не редактируй существующие GHL SMS workflows.
+Позже Дмитрий отдельно решит, какие automation конфликтуют с ручной перепиской.
+
+==================================================
+16. ФИНАЛЬНЫЙ ОТЧЁТ
+==================================================
+
+В конце дай кратко:
+1. GitHub repo + commit
+2. Railway public URL
+3. Neon migrations status
+4. Telegram webhook status
+5. Bot username
+6. Sales mappings загружены или нет
+7. HighLevel GET checks
+8. `/health` и `/ready`
+9. какие тесты прошли
+10. точные Customer Replied / Transcript Generated webhook URLs для GHL
+11. что Дмитрию осталось сделать вручную
+12. найденные ограничения/риски
+
+НЕ ПЕЧАТАЙ СЕКРЕТЫ.
+
+Обязательно подтверди:
+- NO HIGHLEVEL WRITE REQUESTS WERE MADE
+- NO REAL CUSTOMER RECEIVED A TEST MESSAGE
+- PERSONAL DMITRY INFRASTRUCTURE WAS NOT TOUCHED
