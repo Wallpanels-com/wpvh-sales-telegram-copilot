@@ -60,4 +60,4 @@ HighLevel should continue sending any client-facing appointment SMS itself. This
 
 ## Safety
 
-The supplied project contains **no HighLevel write method**. All HighLevel HTTP calls in `src/services/ghl.ts` are GET requests.
+The supplied project contains **no HighLevel write method**. All HighLevel HTTP calls in `src/services/ghl.ts` are GET requests. The shared secret is accepted through `?secret=...` for the standard Webhook action, removed before persistence, timing-safely compared, and redacted from HTTP request logs. Requests are accepted only for the configured WallPanels and Verona location IDs.

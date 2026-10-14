@@ -121,6 +121,17 @@ TELEGRAM_DELIVERY_MODE=disabled
 
 For a Dmitry-only pilot, switch to `allowlist` and put only Dmitry's Telegram ID in `TELEGRAM_ALLOWED_USER_IDS`. Use `all` only after the pilot is approved. `AUTOMATION_ENABLED` independently controls background event processing, polling, and schedules.
 
+For a production-shaped shadow test, use:
+
+```text
+SHADOW_TEST_ENABLED=true
+SHADOW_TEST_RECIPIENT_TELEGRAM_ID=DMITRY_TELEGRAM_ID
+SHADOW_TEST_SALES_GHL_IDS=MARY_GHL_ID,ANTON_GHL_ID
+SHADOW_TEST_UNTIL=
+```
+
+Shadow mode fails closed: it processes only clients whose current HighLevel Assigned User is in the configured ID set, routes every resulting card only to the shadow recipient, and never falls through to normal Sales/admin delivery. An expired `SHADOW_TEST_UNTIL` stops both processing and delivery until the configuration is changed.
+
 ## Telegram commands
 
 - `/today` — tasks/calls/meetings due today

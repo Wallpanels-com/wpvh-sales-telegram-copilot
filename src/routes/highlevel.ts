@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { WebhookKind } from '../types.js';
@@ -13,17 +14,21 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
   ];
 
   for (const route of routes) {
-    app.post(route.path, async (request, reply) => {
+    app.post(route.path, { bodyLimit: 1024 * 1024 }, async (request, reply) => {
       const query = (request.query ?? {}) as Record<string, unknown>;
       const headerSecret = String(request.headers['x-webhook-secret'] ?? '');
       const querySecret = String(query.secret ?? '');
-      if (headerSecret !== config.GHL_WEBHOOK_SHARED_SECRET && querySecret !== config.GHL_WEBHOOK_SHARED_SECRET) {
+      if (!matchesSecret(headerSecret, config.GHL_WEBHOOK_SHARED_SECRET) && !matchesSecret(querySecret, config.GHL_WEBHOOK_SHARED_SECRET)) {
         return reply.code(401).send({ ok: false, error: 'unauthorized' });
       }
 
       const payload = mergeQueryIntoPayload(request.body, query);
       delete payload.secret;
       const n = normalizeWebhook(route.kind, payload);
+      if (!n.locationId) return reply.code(400).send({ ok: false, error: 'locationId_required' });
+      if (n.locationId !== config.GHL_WP_LOCATION_ID && n.locationId !== config.GHL_VH_LOCATION_ID) {
+        return reply.code(403).send({ ok: false, error: 'location_not_allowed' });
+      }
       const inserted = await db.enqueueEvent({
         eventKey: n.eventKey,
         source: 'ghl_workflow_webhook',
@@ -33,4 +38,11 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
       return reply.code(200).send({ ok: true, accepted: inserted });
     });
   }
+}
+
+function matchesSecret(candidate: string, expected: string): boolean {
+  if (!candidate) return false;
+  const left = createHash('sha256').update(candidate).digest();
+  const right = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(left, right);
 }

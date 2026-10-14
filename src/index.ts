@@ -12,10 +12,24 @@ import { TelegramClient } from './services/telegram.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerHighLevelRoutes } from './routes/highlevel.js';
 import { registerTelegramRoute } from './routes/telegram.js';
+import { isShadowTestActive } from './services/delivery-policy.js';
 
 const config = loadConfig();
 const app = Fastify({
-  logger: { level: config.LOG_LEVEL },
+  logger: {
+    level: config.LOG_LEVEL,
+    serializers: {
+      req(request: any) {
+        return {
+          method: request.method,
+          url: String(request.url ?? '').replace(/([?&](?:secret|fullTranscript|transcript)=)[^&]*/gi, '$1[REDACTED]'),
+          host: request.headers?.host,
+          remoteAddress: request.socket?.remoteAddress,
+          remotePort: request.socket?.remotePort
+        };
+      }
+    }
+  },
   bodyLimit: 2 * 1024 * 1024
 });
 
@@ -39,6 +53,9 @@ app.get('/', async () => ({
   highLevelWriteAccess: false,
   automationEnabled: config.AUTOMATION_ENABLED,
   telegramDeliveryMode: config.TELEGRAM_DELIVERY_MODE,
+  shadowTestEnabled: config.SHADOW_TEST_ENABLED,
+  shadowTestActive: isShadowTestActive(config),
+  shadowTestSalesCount: config.shadowTestSalesGhlIds.size,
   pollingFallback: config.POLLING_ENABLED
 }));
 

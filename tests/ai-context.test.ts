@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildReplyPrompt, estimateTokens, getRateLimitBackoffMs } from '../src/services/ai.js';
-import { canDeliverToTelegram } from '../src/services/delivery-policy.js';
+import { canDeliverToTelegram, prependShadowTestPrefix, shouldProcessAssignedSales } from '../src/services/delivery-policy.js';
 import type { AppConfig } from '../src/config.js';
 import type { ClientContext } from '../src/types.js';
 
@@ -75,5 +75,37 @@ describe('Telegram delivery policy', () => {
     expect(canDeliverToTelegram(disabled, '1')).toBe(false);
     expect(canDeliverToTelegram(allowlist, '1')).toBe(true);
     expect(canDeliverToTelegram(allowlist, '2')).toBe(false);
+  });
+
+  it('routes an active shadow test only to its single recipient and scoped Assigned Users', () => {
+    const shadow = {
+      SHADOW_TEST_ENABLED: true,
+      SHADOW_TEST_RECIPIENT_TELEGRAM_ID: 'dmitry',
+      SHADOW_TEST_SALES_GHL_IDS: 'mary,anton',
+      SHADOW_TEST_UNTIL: '',
+      shadowTestSalesGhlIds: new Set(['mary', 'anton']),
+      TELEGRAM_DELIVERY_MODE: 'all',
+      telegramAllowedUserIds: new Set(['kate', 'mary-tg', 'anton-tg'])
+    } as unknown as AppConfig;
+
+    expect(shouldProcessAssignedSales(shadow, 'mary')).toBe(true);
+    expect(shouldProcessAssignedSales(shadow, 'anton')).toBe(true);
+    expect(shouldProcessAssignedSales(shadow, 'kate')).toBe(false);
+    expect(canDeliverToTelegram(shadow, 'dmitry')).toBe(true);
+    expect(canDeliverToTelegram(shadow, 'mary-tg')).toBe(false);
+    expect(canDeliverToTelegram(shadow, 'anton-tg')).toBe(false);
+    expect(canDeliverToTelegram(shadow, 'kate')).toBe(false);
+    expect(prependShadowTestPrefix(shadow, 'card', 'Mary Razumna')).toBe('[SHADOW TEST — Mary Razumna]\ncard');
+  });
+
+  it('fails closed when a configured shadow test has expired', () => {
+    const expired = {
+      SHADOW_TEST_ENABLED: true,
+      SHADOW_TEST_RECIPIENT_TELEGRAM_ID: 'dmitry',
+      SHADOW_TEST_UNTIL: '2020-01-01T00:00:00Z',
+      shadowTestSalesGhlIds: new Set(['mary'])
+    } as unknown as AppConfig;
+    expect(shouldProcessAssignedSales(expired, 'mary')).toBe(false);
+    expect(canDeliverToTelegram(expired, 'dmitry')).toBe(false);
   });
 });

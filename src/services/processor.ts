@@ -6,7 +6,7 @@ import { isWithinWorkHours, nextWorkStart } from '../utils/time.js';
 import { AiRateLimitError, AiService } from './ai.js';
 import { buildAppointmentCard, buildCallCard, buildReplyCard, buildTaskReminderCard, hydrateCardCallbacks } from './cards.js';
 import { ContextService } from './context.js';
-import { canDeliverToTelegram } from './delivery-policy.js';
+import { canDeliverToTelegram, prependShadowTestPrefix, shouldProcessAssignedSales } from './delivery-policy.js';
 import { GhlClient } from './ghl.js';
 import { resolveRecipients } from './recipients.js';
 import { TelegramClient } from './telegram.js';
@@ -108,6 +108,7 @@ export class EventProcessor {
     if (!contactId) throw new Error('customer reply event has no contactId and could not resolve it');
 
     const context = await this.contextService.build({ brand, contactId, conversationId, messageId: inputMessageId });
+    if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'customer reply', context.contactId)) return;
     const effectiveMessage = triggerMessage ?? context.triggerMessage;
     if (effectiveMessage?.direction && effectiveMessage.direction !== 'inbound') return;
     const effectiveMessageId = inputMessageId ?? effectiveMessage?.id;
@@ -143,7 +144,7 @@ export class EventProcessor {
         payload: { whyRu: ai.whyRu, contextTokensEstimate: ai.contextTokensEstimate }
       });
       const keyboard = hydrateCardCallbacks(draft.keyboard, cardId);
-      await this.deliverOrDefer(cardId, recipients, draft.text, keyboard);
+      await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, draft.text, assignedSales?.name), keyboard);
     } catch (error) {
       if (claimed && effectiveMessageId) await this.db.unmarkMessageProcessed(locationId, effectiveMessageId);
       throw error;
@@ -168,6 +169,9 @@ export class EventProcessor {
     }
     if (!contactId) throw new Error('transcript event has no contactId');
 
+    const context = await this.contextService.build({ brand, contactId, conversationId: callMessage?.conversationId, messageId });
+    if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'transcript', context.contactId)) return;
+
     const analysisMessageId = messageId ?? n.eventKey;
     const processedKey = `transcript:${analysisMessageId}`;
     const claimed = await this.db.markMessageProcessed(locationId, processedKey, callMessage?.direction, callMessage?.messageType ?? 'TYPE_CALL');
@@ -181,7 +185,6 @@ export class EventProcessor {
       }
       if (!transcript?.trim()) throw new Error('transcript not available yet');
 
-      const context = await this.contextService.build({ brand, contactId, conversationId: callMessage?.conversationId, messageId });
       const analysis = await this.ai.analyzeCall({
         contactName: context.contactName,
         brandLabel: context.brandLabel,
@@ -212,9 +215,9 @@ export class EventProcessor {
         kind: 'call', brand, locationId, contactId, conversationId: context.conversationId, messageId,
         assignedGhlUserId: context.assignedGhlUserId, contactName: context.contactName,
         contextSummary: analysis.summary, nextAction: analysis.nextSteps[0] ?? 'Review call summary', priority: 'medium', shouldReply: false,
-        payload: analysis
+        payload: { ...analysis, callDate: callMessage?.dateAdded }
       });
-      await this.deliverOrDefer(cardId, recipients, card.text, card.keyboard);
+      await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, card.text, assignedSales?.name), card.keyboard);
     } catch (error) {
       if (claimed) await this.db.unmarkMessageProcessed(locationId, processedKey);
       throw error;
@@ -225,7 +228,9 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('task reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
-    const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, n.assignedUserId ?? context.assignedGhlUserId);
+    const assignedGhlUserId = n.assignedUserId ?? context.assignedGhlUserId;
+    if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'task reminder', context.contactId)) return;
+    const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
     const taskTitle = n.taskTitle ?? context.openTasks[0]?.title ?? 'Task due';
     const dueDate = n.dueDate ?? context.openTasks[0]?.dueDate;
     const card = buildTaskReminderCard(this.config, this.ghl, {
@@ -240,18 +245,20 @@ export class EventProcessor {
     });
     const cardId = await this.db.createCard({
       kind: 'task', brand, locationId: context.locationId, contactId: context.contactId,
-      assignedGhlUserId: n.assignedUserId ?? context.assignedGhlUserId, contactName: context.contactName,
+      assignedGhlUserId, contactName: context.contactName,
       stageName: context.stageName, nextAction: taskTitle, priority: 'high', shouldReply: false,
       payload: { dueDate }
     });
-    await this.deliverOrDefer(cardId, recipients, card.text, card.keyboard);
+    await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, card.text, assignedSales?.name), card.keyboard);
   }
 
   private async processAppointmentReminder(n: ReturnType<typeof normalizeWebhook>) {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('appointment reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
-    const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, n.assignedUserId ?? context.assignedGhlUserId);
+    const assignedGhlUserId = n.assignedUserId ?? context.assignedGhlUserId;
+    if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'appointment reminder', context.contactId)) return;
+    const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
     const brief = [context.relationshipSummary, context.lastCallSummary].filter(Boolean).join(' ');
     const card = buildAppointmentCard(this.config, this.ghl, {
       brandLabel: context.brandLabel,
@@ -264,11 +271,11 @@ export class EventProcessor {
     });
     const cardId = await this.db.createCard({
       kind: 'appointment', brand, locationId: context.locationId, contactId: context.contactId,
-      assignedGhlUserId: n.assignedUserId ?? context.assignedGhlUserId, contactName: context.contactName,
-      stageName: context.stageName, nextAction: 'Prepare for appointment', priority: 'high', shouldReply: false,
+      assignedGhlUserId, contactName: context.contactName,
+      stageName: context.stageName, contextSummary: brief, nextAction: 'Prepare for appointment', priority: 'high', shouldReply: false,
       payload: { startTime: n.appointmentStart }
     });
-    await this.deliverOrDefer(cardId, recipients, card.text, card.keyboard);
+    await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, card.text, assignedSales?.name), card.keyboard);
   }
 
   async deliverDeferredNow() {
@@ -315,10 +322,36 @@ export class EventProcessor {
       };
       const { assignedSales } = await resolveRecipients(this.config, this.db, brand, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined);
       const built = buildReplyCard(this.config, this.ghl, context, ai, assignedSales?.name);
-      return { text: built.text, keyboard: hydrateCardCallbacks(built.keyboard, String(card.id)) };
+      return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name), keyboard: hydrateCardCallbacks(built.keyboard, String(card.id)) };
+    }
+    const { assignedSales } = await resolveRecipients(this.config, this.db, brand, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined);
+    if (card.kind === 'call') {
+      const built = buildCallCard(this.config, this.ghl, {
+        brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
+        contactName: String(card.contact_name ?? 'Client'), assignedName: assignedSales?.name,
+        analysis: card.payload, callDate: card.payload?.callDate
+      });
+      return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name), keyboard: built.keyboard };
+    }
+    if (card.kind === 'task') {
+      const built = buildTaskReminderCard(this.config, this.ghl, {
+        brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
+        contactName: String(card.contact_name ?? 'Client'), taskTitle: String(card.next_action ?? 'Task due'),
+        dueDate: card.payload?.dueDate, stage: card.stage_name ? String(card.stage_name) : undefined, assignedName: assignedSales?.name
+      });
+      return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name), keyboard: built.keyboard };
+    }
+    if (card.kind === 'appointment') {
+      const built = buildAppointmentCard(this.config, this.ghl, {
+        brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
+        contactName: String(card.contact_name ?? 'Client'), startTime: card.payload?.startTime,
+        context: card.context_summary ? String(card.context_summary) : undefined, assignedName: assignedSales?.name
+      });
+      return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name), keyboard: built.keyboard };
     }
     const link = [[{ text: '↗️ Open in GHL', url: this.ghl.contactUrl(String(card.location_id), String(card.contact_id)) }]] as any;
-    return { text: `<b>${String(card.kind).toUpperCase()}</b>\n${String(card.context_summary ?? card.next_action ?? '')}`, keyboard: link };
+    const text = `<b>${String(card.kind).toUpperCase()}</b>\n${String(card.context_summary ?? card.next_action ?? '')}`;
+    return { text: prependShadowTestPrefix(this.config, text, assignedSales?.name), keyboard: link };
   }
 
   private async deliverOrDefer(cardId: string, recipients: string[], text: string, keyboard: any[][]) {
@@ -347,6 +380,14 @@ export class EventProcessor {
     const brand = this.ghl.brandFromLocation(locationId);
     if (!brand) throw new Error(`unknown HighLevel locationId: ${locationId}`);
     return brand;
+  }
+
+  private shouldHandleAssignedSales(assignedGhlUserId: string | undefined, eventType: string, contactId: string): boolean {
+    const allowed = shouldProcessAssignedSales(this.config, assignedGhlUserId);
+    if (!allowed) {
+      this.logger.info({ eventType, contactId, assignedGhlUserId: assignedGhlUserId ?? null }, 'event skipped by shadow test scope');
+    }
+    return allowed;
   }
 }
 

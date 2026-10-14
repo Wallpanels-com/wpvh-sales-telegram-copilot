@@ -6,7 +6,7 @@ import { BriefingService } from '../services/briefing.js';
 import { ContextService } from '../services/context.js';
 import { GhlClient } from '../services/ghl.js';
 import { canTelegramUserAccessCard } from '../services/recipients.js';
-import { canDeliverToTelegram } from '../services/delivery-policy.js';
+import { canDeliverToTelegram, prependShadowTestPrefix } from '../services/delivery-policy.js';
 import { TelegramClient } from '../services/telegram.js';
 import { escapeHtml } from '../utils/html.js';
 
@@ -137,9 +137,12 @@ export async function registerTelegramRoute(
       lessons
     );
     const label = mode === 'shorter' ? 'Shorter' : mode === 'friendlier' ? 'Friendlier' : 'Rewrite';
+    const assignedSales = card.assigned_ghl_user_id
+      ? await db.getSalesByGhlUserId(brand, String(card.assigned_ghl_user_id))
+      : null;
     await telegram.sendMessage({
       chatId,
-      text: `✨ <b>${escapeHtml(label)}</b>\n\n${escapeHtml(rewritten)}`,
+      text: prependShadowTestPrefix(config, `✨ <b>${escapeHtml(label)}</b>\n\n${escapeHtml(rewritten)}`, assignedSales?.name),
       keyboard: [
         [{ text: '📋 Copy', copy_text: { text: rewritten } }],
         [{ text: '↗️ Open in GHL', url: ghl.contactUrl(String(card.location_id), String(card.contact_id)) }]

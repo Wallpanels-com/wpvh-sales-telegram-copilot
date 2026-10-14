@@ -14,4 +14,6 @@
 12. Keep `AUTOMATION_ENABLED=false` until AI validation and the Dmitry-only test are complete. After approval, enable automation while Telegram remains allowlisted.
 13. Keep `POLLING_ENABLED=true` initially. After webhook delivery is proven reliable, polling can remain as recovery fallback or be disabled.
 
+For the temporary shadow rollout, enable `SHADOW_TEST_ENABLED`, set exactly one `SHADOW_TEST_RECIPIENT_TELEGRAM_ID`, and list the target HighLevel Assigned User IDs in `SHADOW_TEST_SALES_GHL_IDS`. Use `POLLING_ENABLED=false` while validating the new workflow webhooks. Shadow routing takes precedence over admin, allowlist, and assigned-Sales routing.
+
 Do not send test customer messages or modify HighLevel data. Validate with read-only data and Dmitry's Telegram account first.

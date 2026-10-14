@@ -31,4 +31,20 @@ describe('recipient routing', () => {
     const result = await resolveRecipients(config, db, 'vh', 'shared-id');
     expect(result.recipients).toEqual(['admin1']);
   });
+
+  it('overrides every production recipient with Dmitry during shadow mode', async () => {
+    const config: any = {
+      SHADOW_TEST_ENABLED: true,
+      SHADOW_TEST_RECIPIENT_TELEGRAM_ID: 'dmitry',
+      SHADOW_TEST_UNTIL: '',
+      shadowTestSalesGhlIds: new Set(['mary-ghl', 'anton-ghl']),
+      adminTelegramUserIds: ['dmitry', 'kate']
+    };
+    const db: any = {
+      getSalesByGhlUserId: async () => ({ telegramUserId: 'mary-tg', name: 'Mary Razumna' })
+    };
+    const result = await resolveRecipients(config, db, 'wp', 'mary-ghl');
+    expect(result.recipients).toEqual(['dmitry']);
+    expect(result.assignedSales?.name).toBe('Mary Razumna');
+  });
 });

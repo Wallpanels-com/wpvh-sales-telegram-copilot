@@ -25,6 +25,14 @@ const envSchema = z.object({
   ADMIN_TELEGRAM_USER_IDS: z.string().default(''),
   SALES_MAPPINGS_JSON: z.string().default('[]'),
 
+  SHADOW_TEST_ENABLED: boolFromEnv.default(false),
+  SHADOW_TEST_RECIPIENT_TELEGRAM_ID: z.string().default(''),
+  SHADOW_TEST_SALES_GHL_IDS: z.string().default(''),
+  SHADOW_TEST_UNTIL: z.string().default('').refine(
+    (value) => !value || !Number.isNaN(Date.parse(value)),
+    'SHADOW_TEST_UNTIL must be an ISO date/time or empty'
+  ),
+
   AI_PROVIDER: z.enum(['openai', 'openai-compatible', 'groq']).default('openai'),
   AI_API_KEY: z.string().optional().default(''),
   AI_MODEL: z.string().optional().default(''),
@@ -64,6 +72,7 @@ const envSchema = z.object({
 export type AppConfig = z.infer<typeof envSchema> & {
   adminTelegramUserIds: string[];
   telegramAllowedUserIds: Set<string>;
+  shadowTestSalesGhlIds: Set<string>;
   workDays: Set<number>;
   pollingChannels: string[];
   aiApiKey: string;
@@ -78,10 +87,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if ((parsed.AI_PROVIDER === 'openai-compatible' || parsed.AI_PROVIDER === 'groq') && !parsed.AI_BASE_URL) {
     throw new Error('AI_BASE_URL is required when AI_PROVIDER=openai-compatible or groq');
   }
+  const shadowTestSalesGhlIds = new Set(parsed.SHADOW_TEST_SALES_GHL_IDS.split(',').map((x) => x.trim()).filter(Boolean));
+  if (parsed.SHADOW_TEST_ENABLED && !parsed.SHADOW_TEST_RECIPIENT_TELEGRAM_ID.trim()) {
+    throw new Error('SHADOW_TEST_RECIPIENT_TELEGRAM_ID is required when SHADOW_TEST_ENABLED=true');
+  }
+  if (parsed.SHADOW_TEST_ENABLED && !shadowTestSalesGhlIds.size) {
+    throw new Error('SHADOW_TEST_SALES_GHL_IDS must contain at least one ID when SHADOW_TEST_ENABLED=true');
+  }
   return {
     ...parsed,
     adminTelegramUserIds: parsed.ADMIN_TELEGRAM_USER_IDS.split(',').map((x) => x.trim()).filter(Boolean),
     telegramAllowedUserIds: new Set(parsed.TELEGRAM_ALLOWED_USER_IDS.split(',').map((x) => x.trim()).filter(Boolean)),
+    shadowTestSalesGhlIds,
     workDays: new Set(parsed.WORK_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x >= 1 && x <= 7)),
     pollingChannels: parsed.POLLING_CHANNELS.split(',').map((x) => x.trim()).filter(Boolean),
     aiApiKey,
