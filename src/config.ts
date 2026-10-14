@@ -44,6 +44,7 @@ const envSchema = z.object({
   WORK_DAYS: z.string().default('1,2,3,4,5,6'),
   DAILY_BRIEF_TIME: z.string().regex(/^\d{2}:\d{2}$/).default('08:45'),
 
+  AUTOMATION_ENABLED: boolFromEnv.default(true),
   POLLING_ENABLED: boolFromEnv.default(true),
   POLLING_INTERVAL_SECONDS: z.coerce.number().int().min(30).max(900).default(60),
   POLLING_CHANNELS: z.string().default('SMS,Email,WhatsApp,Instagram,Facebook,Call'),

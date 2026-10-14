@@ -37,11 +37,16 @@ app.get('/', async () => ({
   service: 'WP/VH AI Sales Telegram Copilot',
   ok: true,
   highLevelWriteAccess: false,
+  automationEnabled: config.AUTOMATION_ENABLED,
   pollingFallback: config.POLLING_ENABLED
 }));
 
 app.addHook('onReady', async () => {
   await db.recoverStuckWork();
+  if (!config.AUTOMATION_ENABLED) {
+    app.log.warn('automation is disabled; webhook ingestion remains available');
+    return;
+  }
   processor.start();
   poller.start();
   scheduler.start();
