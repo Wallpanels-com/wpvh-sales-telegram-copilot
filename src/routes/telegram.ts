@@ -6,6 +6,7 @@ import { BriefingService } from '../services/briefing.js';
 import { ContextService } from '../services/context.js';
 import { GhlClient } from '../services/ghl.js';
 import { canTelegramUserAccessCard } from '../services/recipients.js';
+import { canDeliverToTelegram } from '../services/delivery-policy.js';
 import { TelegramClient } from '../services/telegram.js';
 import { escapeHtml } from '../utils/html.js';
 
@@ -25,6 +26,10 @@ export async function registerTelegramRoute(
       return reply.code(401).send({ ok: false });
     }
     const update = request.body as any;
+    const actorId = String(update?.callback_query?.from?.id ?? update?.message?.from?.id ?? '');
+    if (!actorId || !canDeliverToTelegram(config, actorId)) {
+      return reply.code(200).send({ ok: true });
+    }
     // Ack quickly; processing is lightweight and Telegram retries on transport failure.
     void handleUpdate(update).catch((err) => app.log.error({ err }, 'telegram update failed'));
     return reply.code(200).send({ ok: true });

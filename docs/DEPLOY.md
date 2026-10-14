@@ -9,8 +9,9 @@
 7. Set `PUBLIC_BASE_URL` to the generated Railway HTTPS domain.
 8. Run `npm run seed:sales` once with production env to upsert Sales mappings.
 9. Run `npm run telegram:set-webhook` once with production env.
-10. Send `/status` and `/today` to the bot from Dmitry's Telegram account.
+10. Keep `TELEGRAM_DELIVERY_MODE=disabled` until the user explicitly approves a Dmitry-only test. Then use `allowlist` with only Dmitry's Telegram ID.
 11. Configure HighLevel Customer Replied + Transcript Generated webhooks from `docs/HIGHLEVEL_WEBHOOK_SETUP.md`.
-12. Keep `POLLING_ENABLED=true` initially. After webhook delivery is proven reliable, polling can remain as recovery fallback or be disabled.
+12. Keep `AUTOMATION_ENABLED=false` until AI validation and the Dmitry-only test are complete. After approval, enable automation while Telegram remains allowlisted.
+13. Keep `POLLING_ENABLED=true` initially. After webhook delivery is proven reliable, polling can remain as recovery fallback or be disabled.
 
 Do not send test customer messages or modify HighLevel data. Validate with read-only data and Dmitry's Telegram account first.

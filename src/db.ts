@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import type { AppConfig } from './config.js';
-import type { BrandKey, SalesUser, WebhookKind } from './types.js';
+import type { BrandKey, CallAnalysis, SalesUser, WebhookKind } from './types.js';
 
 export type Db = ReturnType<typeof createDb>;
 
@@ -92,10 +92,16 @@ export function createDb(config: AppConfig) {
       await sql`UPDATE webhook_events SET status='done', processed_at=now(), processing_started_at=NULL, last_error=NULL WHERE id=${id}`;
     },
 
-    async markEventFailed(id: string, error: string, attempts: number) {
-      const delaySeconds = Math.min(900, Math.max(15, 15 * Math.pow(2, Math.max(0, attempts - 1))));
+    async markEventFailed(
+      id: string,
+      error: string,
+      attempts: number,
+      options: { rateLimited?: boolean; retryAfterSeconds?: number } = {}
+    ) {
+      const exponential = 15 * Math.pow(2, Math.max(0, attempts - 1));
+      const delaySeconds = Math.min(3600, Math.max(15, exponential, options.retryAfterSeconds ?? 0));
       const next = new Date(Date.now() + delaySeconds * 1000).toISOString();
-      const terminal = attempts >= 7;
+      const terminal = !options.rateLimited && attempts >= 7;
       await sql`
         UPDATE webhook_events
         SET status=${terminal ? 'failed' : 'retry'}, last_error=${error.slice(0, 2000)}, next_attempt_at=${next}, processing_started_at=NULL
@@ -115,6 +121,68 @@ export function createDb(config: AppConfig) {
         ON CONFLICT (location_id, contact_id) DO UPDATE SET
           relationship_summary=EXCLUDED.relationship_summary,
           last_call_summary=COALESCE(EXCLUDED.last_call_summary, client_memory.last_call_summary),
+          updated_at=now()
+      `;
+    },
+
+    async saveCallAnalysis(input: {
+      locationId: string;
+      contactId: string;
+      messageId: string;
+      transcriptSha256: string;
+      analysis: CallAnalysis;
+      aiProvider: string;
+      aiModel: string;
+    }) {
+      const needs = JSON.stringify(input.analysis.clientNeeds);
+      const objections = JSON.stringify(input.analysis.objections);
+      const commitments = JSON.stringify(input.analysis.commitments);
+      const nextSteps = JSON.stringify(input.analysis.nextSteps);
+      const importantFacts = JSON.stringify(input.analysis.importantFacts);
+      await sql`
+        WITH saved AS (
+          INSERT INTO call_summaries (
+            location_id, contact_id, message_id, transcript_sha256, summary,
+            client_needs, objections, commitments, next_steps, important_facts,
+            relationship_summary, ai_provider, ai_model
+          ) VALUES (
+            ${input.locationId}, ${input.contactId}, ${input.messageId}, ${input.transcriptSha256},
+            ${input.analysis.summary}, ${needs}::jsonb, ${objections}::jsonb,
+            ${commitments}::jsonb, ${nextSteps}::jsonb, ${importantFacts}::jsonb,
+            ${input.analysis.relationshipSummary}, ${input.aiProvider}, ${input.aiModel}
+          )
+          ON CONFLICT (location_id, message_id) DO UPDATE SET
+            contact_id=EXCLUDED.contact_id,
+            transcript_sha256=EXCLUDED.transcript_sha256,
+            summary=EXCLUDED.summary,
+            client_needs=EXCLUDED.client_needs,
+            objections=EXCLUDED.objections,
+            commitments=EXCLUDED.commitments,
+            next_steps=EXCLUDED.next_steps,
+            important_facts=EXCLUDED.important_facts,
+            relationship_summary=EXCLUDED.relationship_summary,
+            ai_provider=EXCLUDED.ai_provider,
+            ai_model=EXCLUDED.ai_model,
+            updated_at=now()
+          RETURNING 1
+        )
+        INSERT INTO client_memory (
+          location_id, contact_id, relationship_summary, last_call_summary,
+          important_facts, objections, commitments, next_steps, last_call_message_id
+        )
+        SELECT
+          ${input.locationId}, ${input.contactId}, ${input.analysis.relationshipSummary},
+          ${input.analysis.summary}, ${importantFacts}::jsonb, ${objections}::jsonb,
+          ${commitments}::jsonb, ${nextSteps}::jsonb, ${input.messageId}
+        FROM saved
+        ON CONFLICT (location_id, contact_id) DO UPDATE SET
+          relationship_summary=EXCLUDED.relationship_summary,
+          last_call_summary=EXCLUDED.last_call_summary,
+          important_facts=EXCLUDED.important_facts,
+          objections=EXCLUDED.objections,
+          commitments=EXCLUDED.commitments,
+          next_steps=EXCLUDED.next_steps,
+          last_call_message_id=EXCLUDED.last_call_message_id,
           updated_at=now()
       `;
     },
@@ -159,7 +227,24 @@ export function createDb(config: AppConfig) {
       `;
     },
 
-    async claimDueDeferred(limit = 20): Promise<any[]> {
+    async claimDueDeferred(limit = 20, allowedTelegramUserIds?: string[]): Promise<any[]> {
+      if (allowedTelegramUserIds && !allowedTelegramUserIds.length) return [];
+      if (allowedTelegramUserIds) {
+        const allowedJson = JSON.stringify(allowedTelegramUserIds);
+        return await sql`
+          UPDATE deferred_notifications d
+          SET status='processing', processing_started_at=now()
+          WHERE d.id IN (
+            SELECT id FROM deferred_notifications
+            WHERE status='pending' AND deliver_after <= now()
+              AND telegram_user_id IN (SELECT jsonb_array_elements_text(${allowedJson}::jsonb))
+            ORDER BY deliver_after
+            LIMIT ${limit}
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING d.*
+        `;
+      }
       return await sql`
         UPDATE deferred_notifications d
         SET status='processing', processing_started_at=now()

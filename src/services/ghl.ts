@@ -2,7 +2,11 @@ import type { AppConfig } from '../config.js';
 import type { BrandKey, GhlMessage, GhlOpportunity } from '../types.js';
 
 export class GhlClient {
-  private readonly stageCache = new Map<BrandKey, { expiresAt: number; names: Map<string, string> }>();
+  private readonly pipelineCache = new Map<BrandKey, {
+    expiresAt: number;
+    pipelineNames: Map<string, string>;
+    stageNames: Map<string, string>;
+  }>();
 
   constructor(private readonly config: AppConfig) {}
 
@@ -32,17 +36,43 @@ export class GhlClient {
 
   async resolveStageName(brand: BrandKey, stageId?: string): Promise<string | undefined> {
     if (!stageId) return undefined;
-    const cached = this.stageCache.get(brand);
-    if (cached && cached.expiresAt > Date.now()) return cached.names.get(stageId) ?? stageId;
+    const cached = await this.getPipelineCache(brand);
+    return cached.stageNames.get(stageId) ?? stageId;
+  }
+
+  async resolvePipelineName(brand: BrandKey, pipelineId?: string): Promise<string | undefined> {
+    if (!pipelineId) return undefined;
+    const cached = await this.getPipelineCache(brand);
+    return cached.pipelineNames.get(pipelineId) ?? pipelineId;
+  }
+
+  async resolvePipelineContext(brand: BrandKey, pipelineId?: string, stageId?: string): Promise<{
+    pipelineName?: string;
+    stageName?: string;
+  }> {
+    if (!pipelineId && !stageId) return {};
+    const cached = await this.getPipelineCache(brand);
+    return {
+      pipelineName: pipelineId ? cached.pipelineNames.get(pipelineId) ?? pipelineId : undefined,
+      stageName: stageId ? cached.stageNames.get(stageId) ?? stageId : undefined
+    };
+  }
+
+  private async getPipelineCache(brand: BrandKey) {
+    const cached = this.pipelineCache.get(brand);
+    if (cached && cached.expiresAt > Date.now()) return cached;
     const pipelines = await this.getPipelines(brand);
-    const names = new Map<string, string>();
+    const pipelineNames = new Map<string, string>();
+    const stageNames = new Map<string, string>();
     for (const pipeline of pipelines) {
+      if (pipeline?.id) pipelineNames.set(String(pipeline.id), String(pipeline.name ?? pipeline.id));
       for (const stage of pipeline?.stages ?? []) {
-        if (stage?.id) names.set(String(stage.id), String(stage.name ?? stage.id));
+        if (stage?.id) stageNames.set(String(stage.id), String(stage.name ?? stage.id));
       }
     }
-    this.stageCache.set(brand, { expiresAt: Date.now() + 10 * 60_000, names });
-    return names.get(stageId) ?? stageId;
+    const value = { expiresAt: Date.now() + 10 * 60_000, pipelineNames, stageNames };
+    this.pipelineCache.set(brand, value);
+    return value;
   }
 
   async getContact(brand: BrandKey, contactId: string): Promise<any> {

@@ -1,10 +1,12 @@
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { BrandKey, GhlMessage, WebhookKind } from '../types.js';
+import { sha256 } from '../utils/hash.js';
 import { isWithinWorkHours, nextWorkStart } from '../utils/time.js';
-import { AiService } from './ai.js';
+import { AiRateLimitError, AiService } from './ai.js';
 import { buildAppointmentCard, buildCallCard, buildReplyCard, buildTaskReminderCard, hydrateCardCallbacks } from './cards.js';
 import { ContextService } from './context.js';
+import { canDeliverToTelegram } from './delivery-policy.js';
 import { GhlClient } from './ghl.js';
 import { resolveRecipients } from './recipients.js';
 import { TelegramClient } from './telegram.js';
@@ -46,7 +48,11 @@ export class EventProcessor {
           await this.db.markEventDone(String(event.id));
         } catch (error: any) {
           this.logger.error({ eventId: event.id, kind: event.kind, err: safeError(error) }, 'event processing failed');
-          await this.db.markEventFailed(String(event.id), safeError(error), Number(event.attempts ?? 1));
+          const rateLimit = error instanceof AiRateLimitError ? error : null;
+          await this.db.markEventFailed(String(event.id), safeError(error), Number(event.attempts ?? 1), {
+            rateLimited: Boolean(rateLimit),
+            retryAfterSeconds: rateLimit?.retryAfterSeconds
+          });
         }
       } catch (error) {
         this.logger.error({ err: safeError(error) }, 'processor loop error');
@@ -134,7 +140,7 @@ export class EventProcessor {
         nextAction: ai.nextActionRu,
         priority: ai.priority,
         shouldReply: ai.shouldReply,
-        payload: { whyRu: ai.whyRu }
+        payload: { whyRu: ai.whyRu, contextTokensEstimate: ai.contextTokensEstimate }
       });
       const keyboard = hydrateCardCallbacks(draft.keyboard, cardId);
       await this.deliverOrDefer(cardId, recipients, draft.text, keyboard);
@@ -162,17 +168,16 @@ export class EventProcessor {
     }
     if (!contactId) throw new Error('transcript event has no contactId');
 
-    const processedKey = messageId ? `transcript:${messageId}` : undefined;
-    let claimed = false;
-    if (processedKey) {
-      claimed = await this.db.markMessageProcessed(locationId, processedKey, callMessage?.direction, callMessage?.messageType ?? 'TYPE_CALL');
-      if (!claimed) return;
-    }
+    const analysisMessageId = messageId ?? n.eventKey;
+    const processedKey = `transcript:${analysisMessageId}`;
+    const claimed = await this.db.markMessageProcessed(locationId, processedKey, callMessage?.direction, callMessage?.messageType ?? 'TYPE_CALL');
+    if (!claimed) return;
 
     try {
-      if (!transcript && messageId) {
+      if (messageId) {
         const raw = await this.ghl.getTranscription(brand, locationId, messageId);
-        transcript = flattenTranscript(raw);
+        const highLevelTranscript = flattenTranscript(raw);
+        if (highLevelTranscript.trim()) transcript = highLevelTranscript;
       }
       if (!transcript?.trim()) throw new Error('transcript not available yet');
 
@@ -184,7 +189,15 @@ export class EventProcessor {
         previousMemory: context.relationshipSummary
       });
 
-      await this.db.upsertClientMemory(locationId, contactId, analysis.relationshipMemoryRu, analysis.summaryRu);
+      await this.db.saveCallAnalysis({
+        locationId,
+        contactId,
+        messageId: analysisMessageId,
+        transcriptSha256: sha256(transcript),
+        analysis,
+        aiProvider: this.config.AI_PROVIDER,
+        aiModel: this.config.aiModel
+      });
       const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, context.assignedGhlUserId);
       const card = buildCallCard(this.config, this.ghl, {
         brandLabel: context.brandLabel,
@@ -198,12 +211,12 @@ export class EventProcessor {
       const cardId = await this.db.createCard({
         kind: 'call', brand, locationId, contactId, conversationId: context.conversationId, messageId,
         assignedGhlUserId: context.assignedGhlUserId, contactName: context.contactName,
-        contextSummary: analysis.summaryRu, nextAction: analysis.nextStepRu, priority: 'medium', shouldReply: false,
+        contextSummary: analysis.summary, nextAction: analysis.nextSteps[0] ?? 'Review call summary', priority: 'medium', shouldReply: false,
         payload: analysis
       });
       await this.deliverOrDefer(cardId, recipients, card.text, card.keyboard);
     } catch (error) {
-      if (claimed && processedKey) await this.db.unmarkMessageProcessed(locationId, processedKey);
+      if (claimed) await this.db.unmarkMessageProcessed(locationId, processedKey);
       throw error;
     }
   }
@@ -259,7 +272,11 @@ export class EventProcessor {
   }
 
   async deliverDeferredNow() {
-    const due = await this.db.claimDueDeferred(50);
+    if (this.config.TELEGRAM_DELIVERY_MODE === 'disabled') return;
+    const allowed = this.config.TELEGRAM_DELIVERY_MODE === 'allowlist'
+      ? [...this.config.telegramAllowedUserIds]
+      : undefined;
+    const due = await this.db.claimDueDeferred(50, allowed);
     for (const item of due) {
       try {
         const card = await this.db.getCard(String(item.card_id));
@@ -293,7 +310,8 @@ export class EventProcessor {
         suggestedReply: String(card.suggested_reply ?? ''),
         nextActionRu: String(card.next_action ?? ''),
         priority: (card.priority ?? 'medium') as 'high' | 'medium' | 'low',
-        shouldReply: Boolean(card.should_reply)
+        shouldReply: Boolean(card.should_reply),
+        contextTokensEstimate: Number(card.payload?.contextTokensEstimate ?? 0)
       };
       const { assignedSales } = await resolveRecipients(this.config, this.db, brand, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined);
       const built = buildReplyCard(this.config, this.ghl, context, ai, assignedSales?.name);
@@ -304,16 +322,17 @@ export class EventProcessor {
   }
 
   private async deliverOrDefer(cardId: string, recipients: string[], text: string, keyboard: any[][]) {
-    if (!recipients.length) {
+    const permittedRecipients = recipients.filter((id) => canDeliverToTelegram(this.config, id));
+    if (!permittedRecipients.length) {
       this.logger.warn({ cardId }, 'no Telegram recipients resolved');
       return;
     }
     if (!isWithinWorkHours(this.config)) {
       const deliverAt = nextWorkStart(this.config).toUTC().toISO()!;
-      for (const chatId of recipients) await this.db.deferDelivery(cardId, chatId, deliverAt);
+      for (const chatId of permittedRecipients) await this.db.deferDelivery(cardId, chatId, deliverAt);
       return;
     }
-    for (const chatId of recipients) {
+    for (const chatId of permittedRecipients) {
       try {
         const result = await this.telegram.sendMessage({ chatId, text, keyboard });
         await this.db.recordDelivery(cardId, chatId, result.message_id, 'primary');

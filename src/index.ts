@@ -38,11 +38,20 @@ app.get('/', async () => ({
   ok: true,
   highLevelWriteAccess: false,
   automationEnabled: config.AUTOMATION_ENABLED,
+  telegramDeliveryMode: config.TELEGRAM_DELIVERY_MODE,
   pollingFallback: config.POLLING_ENABLED
 }));
 
 app.addHook('onReady', async () => {
   await db.recoverStuckWork();
+  if (config.AI_VALIDATE_ON_STARTUP) {
+    try {
+      await ai.validateConnection();
+      app.log.info({ provider: config.AI_PROVIDER, model: config.aiModel }, 'AI provider validation succeeded');
+    } catch (error) {
+      app.log.error({ provider: config.AI_PROVIDER, model: config.aiModel, err: error instanceof Error ? error.message : String(error) }, 'AI provider validation failed');
+    }
+  }
   if (!config.AUTOMATION_ENABLED) {
     app.log.warn('automation is disabled; webhook ingestion remains available');
     return;

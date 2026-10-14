@@ -6,10 +6,10 @@ Production-oriented TypeScript backend for a Telegram Sales Copilot on top of Go
 
 - Detects new inbound client messages from HighLevel via webhook and/or read-only polling fallback.
 - Routes every event to Dmitry/Kate admins and only to the Sales user assigned in HighLevel.
-- Builds CRM context from Contact, Opportunity, Stage, recent messages, Tasks and stored call memory.
-- Uses OpenAI to create a short suggested reply; it **never sends the reply to the client**.
+- Builds CRM context from Contact, Opportunity, Pipeline/Stage, assigned Sales, 10–15 recent relevant messages, open Tasks, the nearest Appointment and structured call memory.
+- Uses the configured AI provider to create a short suggested reply; it **never sends the reply to the client**.
 - Telegram buttons: Copy reply, Shorter, Friendlier, Rewrite, Open in HighLevel.
-- Analyzes HighLevel call transcripts and stores relationship memory in Neon.
+- Sends each new HighLevel call transcript to AI once, stores its structured summary in Neon, and reuses that summary instead of resending the transcript.
 - `/today` shows due/overdue tasks and today's calendar events from assigned open Opportunities.
 - Daily briefing at configured work start.
 - Off-hours client notifications are deferred to the next work start.
@@ -27,7 +27,7 @@ HighLevel Customer Reply / Call Transcript
               ↓
        HighLevel GET context
               ↓
-            OpenAI
+       AI provider via ENV
               ↓
       Telegram assigned Sales
        + Dmitry + Kate admins
@@ -101,6 +101,25 @@ Admins are configured with:
 `ADMIN_TELEGRAM_USER_IDS=DMITRY_ID,KATE_ID`
 
 Admins receive all routed events; Sales only receive events assigned to their mapped GHL user ID.
+
+## AI provider and safe rollout
+
+The provider is configured entirely through ENV:
+
+```text
+AI_PROVIDER=groq
+AI_MODEL=openai/gpt-oss-120b
+AI_BASE_URL=https://api.groq.com/openai/v1
+AI_API_KEY=...
+```
+
+Keep Telegram delivery disabled during setup:
+
+```text
+TELEGRAM_DELIVERY_MODE=disabled
+```
+
+For a Dmitry-only pilot, switch to `allowlist` and put only Dmitry's Telegram ID in `TELEGRAM_ALLOWED_USER_IDS`. Use `all` only after the pilot is approved. `AUTOMATION_ENABLED` independently controls background event processing, polling, and schedules.
 
 ## Telegram commands
 

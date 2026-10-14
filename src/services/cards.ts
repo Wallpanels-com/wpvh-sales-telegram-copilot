@@ -61,18 +61,18 @@ export function buildCallCard(config: AppConfig, ghl: GhlClient, input: {
 }) {
   const assigned = input.assignedName ? `\n👤 <b>Assigned:</b> ${escapeHtml(input.assignedName)}` : '';
   const lists = [
-    input.analysis.needsRu.length ? `\n\n🎯 <b>Needs</b>\n${bullets(input.analysis.needsRu)}` : '',
-    input.analysis.objectionsRu.length ? `\n\n⚠️ <b>Objections</b>\n${bullets(input.analysis.objectionsRu)}` : '',
-    input.analysis.agreementsRu.length ? `\n\n🤝 <b>Agreements</b>\n${bullets(input.analysis.agreementsRu)}` : ''
+    input.analysis.clientNeeds.length ? `\n\n🎯 <b>Needs</b>\n${bullets(input.analysis.clientNeeds)}` : '',
+    input.analysis.objections.length ? `\n\n⚠️ <b>Objections</b>\n${bullets(input.analysis.objections)}` : '',
+    input.analysis.commitments.length ? `\n\n🤝 <b>Commitments</b>\n${bullets(input.analysis.commitments)}` : ''
   ].join('');
 
   const text = [
     `📞 <b>Call analyzed · ${escapeHtml(input.brandLabel)}</b>`,
     `\n👤 <b>${escapeHtml(input.contactName)}</b>${assigned}`,
     input.callDate ? `\n🕒 ${escapeHtml(formatEt(input.callDate, config.TIMEZONE))}` : '',
-    `\n\n🧠 <b>Summary</b>\n${escapeHtml(clip(input.analysis.summaryRu, 1200))}`,
+    `\n\n🧠 <b>Summary</b>\n${escapeHtml(clip(input.analysis.summary, 1200))}`,
     lists,
-    `\n\n➡️ <b>Next step</b>\n${escapeHtml(clip(input.analysis.nextStepRu, 500))}`
+    `\n\n➡️ <b>Next step</b>\n${escapeHtml(clip(input.analysis.nextSteps[0] ?? 'Not specified.', 500))}`
   ].join('');
 
   const keyboard: InlineButton[][] = [[{ text: '↗️ Open in GHL', url: ghl.contactUrl(input.locationId, input.contactId) }]];

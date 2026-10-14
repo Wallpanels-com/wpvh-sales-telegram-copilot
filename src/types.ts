@@ -60,12 +60,24 @@ export type ClientContext = {
   phone?: string;
   conversationId?: string;
   assignedGhlUserId?: string;
+  assignedSalesName?: string;
   opportunity?: GhlOpportunity;
+  pipelineName?: string;
   stageName?: string;
   recentMessages: GhlMessage[];
   openTasks: NonNullable<GhlOpportunity['tasks']>;
+  nextAppointment?: {
+    id?: string;
+    title?: string;
+    startTime: string;
+    status?: string;
+  };
   relationshipSummary?: string;
   lastCallSummary?: string;
+  importantFacts: string[];
+  objections: string[];
+  commitments: string[];
+  nextSteps: string[];
   triggerMessage?: GhlMessage;
 };
 
@@ -76,15 +88,17 @@ export type AiReply = {
   nextActionRu: string;
   priority: 'high' | 'medium' | 'low';
   shouldReply: boolean;
+  contextTokensEstimate: number;
 };
 
 export type CallAnalysis = {
-  summaryRu: string;
-  needsRu: string[];
-  objectionsRu: string[];
-  agreementsRu: string[];
-  nextStepRu: string;
-  relationshipMemoryRu: string;
+  summary: string;
+  clientNeeds: string[];
+  objections: string[];
+  commitments: string[];
+  nextSteps: string[];
+  importantFacts: string[];
+  relationshipSummary: string;
 };
 
 export type WebhookKind = 'customer_replied' | 'transcript_generated' | 'task_reminder' | 'appointment_reminder' | 'poll_message' | 'poll_call';
