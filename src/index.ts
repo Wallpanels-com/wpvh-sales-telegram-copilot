@@ -56,6 +56,8 @@ app.get('/', async () => ({
   shadowTestEnabled: config.SHADOW_TEST_ENABLED,
   shadowTestActive: isShadowTestActive(config),
   shadowTestSalesCount: config.shadowTestSalesGhlIds.size,
+  shadowTestLocationCount: config.shadowTestLocationIds.size,
+  shadowTestStartedAt: config.SHADOW_TEST_STARTED_AT || null,
   pollingFallback: config.POLLING_ENABLED
 }));
 

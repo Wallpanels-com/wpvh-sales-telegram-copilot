@@ -129,6 +129,34 @@ export class GhlClient {
     );
   }
 
+  async getVoiceAiCallLog(brand: BrandKey, callId: string): Promise<any> {
+    const data = await this.getJson(
+      brand,
+      `/voice-ai/dashboard/call-logs/${encodeURIComponent(callId)}`,
+      { locationId: this.locationId(brand) },
+      '2021-07-28'
+    );
+    return data?.callLog ?? data;
+  }
+
+  async listVoiceAiCallLogs(brand: BrandKey, contactId: string): Promise<any[]> {
+    const data = await this.getJson(
+      brand,
+      '/voice-ai/dashboard/call-logs',
+      {
+        locationId: this.locationId(brand),
+        contactId,
+        page: 1,
+        pageSize: 10,
+        sortBy: 'createdAt',
+        sort: 'descend'
+      },
+      '2021-07-28'
+    );
+    const logs = data?.callLogs ?? data?.logs ?? data?.data;
+    return Array.isArray(logs) ? logs : [];
+  }
+
   async exportMessages(
     brand: BrandKey,
     params: {

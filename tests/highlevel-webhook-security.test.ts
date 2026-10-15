@@ -47,4 +47,28 @@ describe('HighLevel webhook security', () => {
     expect(unknownLocation.statusCode).toBe(403);
     await app.close();
   });
+
+  it('acknowledges but does not queue Verona while WallPanels-only shadow mode is active', async () => {
+    const app = Fastify();
+    let enqueued = false;
+    const shadowConfig = {
+      ...config(),
+      SHADOW_TEST_ENABLED: true,
+      SHADOW_TEST_UNTIL: '',
+      SHADOW_TEST_STARTED_AT: '2026-10-15T10:00:00Z',
+      shadowTestLocationIds: new Set(['wp-location'])
+    } as AppConfig;
+    await registerHighLevelRoutes(app, shadowConfig, {
+      enqueueEvent: async () => { enqueued = true; return true; }
+    } as any);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret&locationId=vh-location&contactId=contact-1'
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, accepted: false, ignored: 'shadow_location_scope' });
+    expect(enqueued).toBe(false);
+    await app.close();
+  });
 });

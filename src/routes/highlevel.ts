@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { WebhookKind } from '../types.js';
+import { shouldProcessShadowLocation } from '../services/delivery-policy.js';
 import { mergeQueryIntoPayload, normalizeWebhook } from '../services/webhook-normalizer.js';
 
 export async function registerHighLevelRoutes(app: FastifyInstance, config: AppConfig, db: Db) {
@@ -28,6 +29,11 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
       if (!n.locationId) return reply.code(400).send({ ok: false, error: 'locationId_required' });
       if (n.locationId !== config.GHL_WP_LOCATION_ID && n.locationId !== config.GHL_VH_LOCATION_ID) {
         return reply.code(403).send({ ok: false, error: 'location_not_allowed' });
+      }
+      app.log.info({ kind: route.kind, eventKey: n.eventKey, locationId: n.locationId, contactId: n.contactId }, 'webhook received');
+      if (!shouldProcessShadowLocation(config, n.locationId)) {
+        app.log.info({ kind: route.kind, eventKey: n.eventKey, locationId: n.locationId }, 'webhook ignored by shadow location scope');
+        return reply.code(200).send({ ok: true, accepted: false, ignored: 'shadow_location_scope' });
       }
       const inserted = await db.enqueueEvent({
         eventKey: n.eventKey,

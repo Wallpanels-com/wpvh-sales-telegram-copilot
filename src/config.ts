@@ -28,6 +28,12 @@ const envSchema = z.object({
   SHADOW_TEST_ENABLED: boolFromEnv.default(false),
   SHADOW_TEST_RECIPIENT_TELEGRAM_ID: z.string().default(''),
   SHADOW_TEST_SALES_GHL_IDS: z.string().default(''),
+  SHADOW_TEST_LOCATION_IDS: z.string().default(''),
+  SHADOW_TEST_SALES_LABELS_JSON: z.string().default('{}'),
+  SHADOW_TEST_STARTED_AT: z.string().default('').refine(
+    (value) => !value || !Number.isNaN(Date.parse(value)),
+    'SHADOW_TEST_STARTED_AT must be an ISO date/time or empty'
+  ),
   SHADOW_TEST_UNTIL: z.string().default('').refine(
     (value) => !value || !Number.isNaN(Date.parse(value)),
     'SHADOW_TEST_UNTIL must be an ISO date/time or empty'
@@ -73,6 +79,8 @@ export type AppConfig = z.infer<typeof envSchema> & {
   adminTelegramUserIds: string[];
   telegramAllowedUserIds: Set<string>;
   shadowTestSalesGhlIds: Set<string>;
+  shadowTestLocationIds: Set<string>;
+  shadowTestSalesLabels: Map<string, string>;
   workDays: Set<number>;
   pollingChannels: string[];
   aiApiKey: string;
@@ -88,17 +96,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new Error('AI_BASE_URL is required when AI_PROVIDER=openai-compatible or groq');
   }
   const shadowTestSalesGhlIds = new Set(parsed.SHADOW_TEST_SALES_GHL_IDS.split(',').map((x) => x.trim()).filter(Boolean));
+  const shadowTestLocationIds = new Set(parsed.SHADOW_TEST_LOCATION_IDS.split(',').map((x) => x.trim()).filter(Boolean));
+  let shadowLabelsRaw: Record<string, unknown>;
+  try {
+    shadowLabelsRaw = JSON.parse(parsed.SHADOW_TEST_SALES_LABELS_JSON || '{}');
+  } catch {
+    throw new Error('SHADOW_TEST_SALES_LABELS_JSON must be a JSON object');
+  }
+  if (!shadowLabelsRaw || Array.isArray(shadowLabelsRaw) || typeof shadowLabelsRaw !== 'object') {
+    throw new Error('SHADOW_TEST_SALES_LABELS_JSON must be a JSON object');
+  }
+  const shadowLabelEntries: Array<[string, string]> = Object.entries(shadowLabelsRaw)
+    .map(([id, label]): [string, string] => [id.trim(), String(label).trim()])
+    .filter(([id, label]) => Boolean(id && label));
+  const shadowTestSalesLabels = new Map<string, string>(shadowLabelEntries);
   if (parsed.SHADOW_TEST_ENABLED && !parsed.SHADOW_TEST_RECIPIENT_TELEGRAM_ID.trim()) {
     throw new Error('SHADOW_TEST_RECIPIENT_TELEGRAM_ID is required when SHADOW_TEST_ENABLED=true');
   }
   if (parsed.SHADOW_TEST_ENABLED && !shadowTestSalesGhlIds.size) {
     throw new Error('SHADOW_TEST_SALES_GHL_IDS must contain at least one ID when SHADOW_TEST_ENABLED=true');
   }
+  if (parsed.SHADOW_TEST_ENABLED && !shadowTestLocationIds.size) {
+    throw new Error('SHADOW_TEST_LOCATION_IDS must contain at least one ID when SHADOW_TEST_ENABLED=true');
+  }
+  if (parsed.SHADOW_TEST_ENABLED && !parsed.SHADOW_TEST_STARTED_AT) {
+    throw new Error('SHADOW_TEST_STARTED_AT is required when SHADOW_TEST_ENABLED=true');
+  }
   return {
     ...parsed,
     adminTelegramUserIds: parsed.ADMIN_TELEGRAM_USER_IDS.split(',').map((x) => x.trim()).filter(Boolean),
     telegramAllowedUserIds: new Set(parsed.TELEGRAM_ALLOWED_USER_IDS.split(',').map((x) => x.trim()).filter(Boolean)),
     shadowTestSalesGhlIds,
+    shadowTestLocationIds,
+    shadowTestSalesLabels,
     workDays: new Set(parsed.WORK_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x >= 1 && x <= 7)),
     pollingChannels: parsed.POLLING_CHANNELS.split(',').map((x) => x.trim()).filter(Boolean),
     aiApiKey,

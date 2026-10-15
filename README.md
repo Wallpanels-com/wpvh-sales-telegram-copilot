@@ -127,10 +127,13 @@ For a production-shaped shadow test, use:
 SHADOW_TEST_ENABLED=true
 SHADOW_TEST_RECIPIENT_TELEGRAM_ID=DMITRY_TELEGRAM_ID
 SHADOW_TEST_SALES_GHL_IDS=MARY_GHL_ID,ANTON_GHL_ID
+SHADOW_TEST_LOCATION_IDS=WALLPANELS_LOCATION_ID
+SHADOW_TEST_SALES_LABELS_JSON={"MARY_GHL_ID":"Mary","ANTON_GHL_ID":"Anton"}
+SHADOW_TEST_STARTED_AT=2026-10-15T12:34:56Z
 SHADOW_TEST_UNTIL=
 ```
 
-Shadow mode fails closed: it processes only clients whose current HighLevel Assigned User is in the configured ID set, routes every resulting card only to the shadow recipient, and never falls through to normal Sales/admin delivery. An expired `SHADOW_TEST_UNTIL` stops both processing and delivery until the configuration is changed.
+Shadow mode fails closed: it processes only new events at or after `SHADOW_TEST_STARTED_AT`, only configured locations, and only clients whose current HighLevel Assigned User is in the configured ID set. Every resulting card routes only to the shadow recipient and never falls through to normal Sales/admin delivery. An expired `SHADOW_TEST_UNTIL` stops both processing and delivery until the configuration is changed. Shadow notifications are immediate and do not wait for the normal Sales work-hours window.
 
 ## Telegram commands
 

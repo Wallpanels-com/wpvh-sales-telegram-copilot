@@ -142,7 +142,12 @@ export async function registerTelegramRoute(
       : null;
     await telegram.sendMessage({
       chatId,
-      text: prependShadowTestPrefix(config, `✨ <b>${escapeHtml(label)}</b>\n\n${escapeHtml(rewritten)}`, assignedSales?.name),
+      text: prependShadowTestPrefix(
+        config,
+        `✨ <b>${escapeHtml(label)}</b>\n\n${escapeHtml(rewritten)}`,
+        assignedSales?.name,
+        card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined
+      ),
       keyboard: [
         [{ text: '📋 Copy', copy_text: { text: rewritten } }],
         [{ text: '↗️ Open in GHL', url: ghl.contactUrl(String(card.location_id), String(card.contact_id)) }]

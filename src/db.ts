@@ -92,6 +92,15 @@ export function createDb(config: AppConfig) {
       await sql`UPDATE webhook_events SET status='done', processed_at=now(), processing_started_at=NULL, last_error=NULL WHERE id=${id}`;
     },
 
+    async markEventDiscarded(id: string, reason: string) {
+      await sql`
+        UPDATE webhook_events
+        SET status='discarded', processed_at=now(), processing_started_at=NULL,
+            last_error=${reason.slice(0, 2000)}
+        WHERE id=${id}
+      `;
+    },
+
     async markEventFailed(
       id: string,
       error: string,

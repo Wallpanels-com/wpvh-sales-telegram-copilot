@@ -21,4 +21,18 @@ describe('normalizeWebhook', () => {
     const b = normalizeWebhook('task_reminder', { locationId: 'x', contactId: 'y', id: 'same' });
     expect(a.eventKey).toBe(b.eventKey);
   });
+
+  it('recognizes a Voice AI call end payload without treating every generic id as a call id', () => {
+    const voice = normalizeWebhook('transcript_generated', {
+      type: 'VoiceAiCallEnd', id: 'voice-call-1', locationId: 'loc', contactId: 'contact', messageId: 'message'
+    });
+    expect(voice.callType).toBe('voice_ai');
+    expect(voice.voiceAiCallId).toBe('voice-call-1');
+
+    const normal = normalizeWebhook('transcript_generated', {
+      id: 'workflow-event', locationId: 'loc', contactId: 'contact', messageId: 'message'
+    });
+    expect(normal.callType).toBe('normal_call');
+    expect(normal.voiceAiCallId).toBeUndefined();
+  });
 });

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { buildReplyPrompt, estimateTokens, getRateLimitBackoffMs } from '../src/services/ai.js';
-import { canDeliverToTelegram, prependShadowTestPrefix, shouldProcessAssignedSales } from '../src/services/delivery-policy.js';
+import {
+  canDeliverToTelegram,
+  isEventAfterShadowStart,
+  prependShadowTestPrefix,
+  shouldProcessAssignedSales,
+  shouldProcessShadowLocation
+} from '../src/services/delivery-policy.js';
 import type { AppConfig } from '../src/config.js';
 import type { ClientContext } from '../src/types.js';
 
@@ -83,7 +89,10 @@ describe('Telegram delivery policy', () => {
       SHADOW_TEST_RECIPIENT_TELEGRAM_ID: 'dmitry',
       SHADOW_TEST_SALES_GHL_IDS: 'mary,anton',
       SHADOW_TEST_UNTIL: '',
+      SHADOW_TEST_STARTED_AT: '2026-10-15T10:00:00Z',
       shadowTestSalesGhlIds: new Set(['mary', 'anton']),
+      shadowTestLocationIds: new Set(['wallpanels']),
+      shadowTestSalesLabels: new Map([['mary', 'Mary'], ['anton', 'Anton']]),
       TELEGRAM_DELIVERY_MODE: 'all',
       telegramAllowedUserIds: new Set(['kate', 'mary-tg', 'anton-tg'])
     } as unknown as AppConfig;
@@ -91,11 +100,15 @@ describe('Telegram delivery policy', () => {
     expect(shouldProcessAssignedSales(shadow, 'mary')).toBe(true);
     expect(shouldProcessAssignedSales(shadow, 'anton')).toBe(true);
     expect(shouldProcessAssignedSales(shadow, 'kate')).toBe(false);
+    expect(shouldProcessShadowLocation(shadow, 'wallpanels')).toBe(true);
+    expect(shouldProcessShadowLocation(shadow, 'verona')).toBe(false);
+    expect(isEventAfterShadowStart(shadow, '2026-10-15T10:00:00Z')).toBe(true);
+    expect(isEventAfterShadowStart(shadow, '2026-10-15T09:59:59Z')).toBe(false);
     expect(canDeliverToTelegram(shadow, 'dmitry')).toBe(true);
     expect(canDeliverToTelegram(shadow, 'mary-tg')).toBe(false);
     expect(canDeliverToTelegram(shadow, 'anton-tg')).toBe(false);
     expect(canDeliverToTelegram(shadow, 'kate')).toBe(false);
-    expect(prependShadowTestPrefix(shadow, 'card', 'Mary Razumna')).toBe('[SHADOW TEST — Mary Razumna]\ncard');
+    expect(prependShadowTestPrefix(shadow, 'card', 'Mary Razumna', 'mary')).toBe('[SHADOW TEST — Mary]\ncard');
   });
 
   it('fails closed when a configured shadow test has expired', () => {

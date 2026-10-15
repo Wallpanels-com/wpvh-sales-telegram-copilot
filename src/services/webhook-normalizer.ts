@@ -12,6 +12,9 @@ export type NormalizedWebhook = {
   dueDate?: string;
   appointmentStart?: string;
   transcript?: string;
+  voiceAiCallId?: string;
+  callType?: 'normal_call' | 'voice_ai';
+  eventTimestamp?: string;
   eventKey: string;
   raw: any;
 };
@@ -32,6 +35,13 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
   const dueDate = first(raw, 'task.dueDate', 'dueDate', 'task_due_date');
   const appointmentStart = first(raw, 'appointment.startTime', 'appointment.start_time', 'startTime', 'appointmentStart');
   const transcript = first(raw, 'fullTranscript', 'full_transcript', 'transcript', 'call.transcript', 'transcription');
+  const eventType = first(raw, 'type', 'eventType', 'event_type', 'callType', 'call_type');
+  const explicitVoiceAiCallId = first(raw, 'voiceAiCallId', 'voice_ai_call_id', 'callId', 'call_id', 'call.id');
+  const voiceAiMarker = [eventType, first(raw, 'agentId', 'agent_id'), first(raw, 'voiceAi')]
+    .filter(Boolean)
+    .join('|');
+  const isVoiceAi = /voice[\s_-]*ai/i.test(String(voiceAiMarker)) || Boolean(first(raw, 'agentId', 'agent_id'));
+  const voiceAiCallId = explicitVoiceAiCallId ?? (isVoiceAi ? first(raw, 'id') : undefined);
   const webhookId = first(raw, 'webhookId', 'webhook_id', 'eventId', 'event_id', 'id');
   const timestamp = first(raw, 'timestamp', 'createdAt', 'dateAdded', 'eventTime');
 
@@ -49,6 +59,9 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
     dueDate: str(dueDate),
     appointmentStart: str(appointmentStart),
     transcript: str(transcript),
+    voiceAiCallId: str(voiceAiCallId),
+    callType: isVoiceAi ? 'voice_ai' : kind === 'transcript_generated' || kind === 'poll_call' ? 'normal_call' : undefined,
+    eventTimestamp: str(timestamp),
     eventKey,
     raw
   };

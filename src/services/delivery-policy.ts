@@ -12,9 +12,32 @@ export function shouldProcessAssignedSales(config: AppConfig, assignedGhlUserId?
   return isShadowTestActive(config) && Boolean(assignedGhlUserId && config.shadowTestSalesGhlIds.has(assignedGhlUserId));
 }
 
-export function prependShadowTestPrefix(config: AppConfig, text: string, assignedSalesName?: string): string {
+export function shouldProcessShadowLocation(config: AppConfig, locationId?: string): boolean {
+  if (!config.SHADOW_TEST_ENABLED) return true;
+  return isShadowTestActive(config) && Boolean(locationId && config.shadowTestLocationIds.has(locationId));
+}
+
+export function isEventAfterShadowStart(config: AppConfig, eventCreatedAt?: string | Date): boolean {
+  if (!config.SHADOW_TEST_ENABLED) return true;
+  if (!config.SHADOW_TEST_STARTED_AT || !eventCreatedAt) return false;
+  const eventTime = eventCreatedAt instanceof Date ? eventCreatedAt.getTime() : Date.parse(eventCreatedAt);
+  return Number.isFinite(eventTime) && eventTime >= Date.parse(config.SHADOW_TEST_STARTED_AT);
+}
+
+export function shadowSalesLabel(config: AppConfig, assignedGhlUserId?: string, assignedSalesName?: string): string {
+  return (assignedGhlUserId ? config.shadowTestSalesLabels.get(assignedGhlUserId) : undefined)
+    || assignedSalesName?.trim()
+    || 'Assigned Sales';
+}
+
+export function prependShadowTestPrefix(
+  config: AppConfig,
+  text: string,
+  assignedSalesName?: string,
+  assignedGhlUserId?: string
+): string {
   if (!isShadowTestActive(config)) return text;
-  const label = assignedSalesName?.trim() || 'Assigned Sales';
+  const label = shadowSalesLabel(config, assignedGhlUserId, assignedSalesName);
   return `[SHADOW TEST — ${escapeHtml(label)}]\n${text}`;
 }
 
