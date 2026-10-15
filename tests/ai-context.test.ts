@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildReplyPrompt, estimateTokens, getRateLimitBackoffMs } from '../src/services/ai.js';
+import {
+  buildReplyPrompt,
+  buildRewritePrompt,
+  CUSTOMER_FACING_ENGLISH_RULE,
+  estimateTokens,
+  getRateLimitBackoffMs,
+  SALES_SYSTEM_PROMPT
+} from '../src/services/ai.js';
 import {
   canDeliverToTelegram,
   isEventAfterShadowStart,
@@ -71,6 +78,29 @@ describe('AI context layer', () => {
     const rateLimit = { status: 429, headers: { get: () => '2' } };
     expect(getRateLimitBackoffMs(rateLimit, 0, 1000)).toBe(2000);
     expect(getRateLimitBackoffMs({ status: 429 }, 3, 1000)).toBe(8000);
+  });
+
+  it('requires American English for Suggested Reply and every rewrite action', () => {
+    const replyPrompt = buildReplyPrompt({
+      ...context(),
+      triggerMessage: { id: 'ru', direction: 'inbound', body: 'Здравствуйте, когда можно получить образцы?' }
+    }, [], 240);
+
+    expect(SALES_SYSTEM_PROMPT).toContain(CUSTOMER_FACING_ENGLISH_RULE);
+    expect(replyPrompt).toContain(CUSTOMER_FACING_ENGLISH_RULE);
+    expect(replyPrompt).not.toContain('на языке клиента');
+
+    const expectedModeInstructions = {
+      shorter: 'Make it noticeably shorter',
+      friendlier: 'Make it warmer and friendlier',
+      rewrite: 'Rewrite it to sound natural'
+    } as const;
+    for (const mode of ['shorter', 'friendlier', 'rewrite'] as const) {
+      const prompt = buildRewritePrompt('Спасибо, я уточню и вернусь к вам.', mode, context(), [], 240);
+      expect(prompt).toContain(CUSTOMER_FACING_ENGLISH_RULE);
+      expect(prompt).toContain(expectedModeInstructions[mode]);
+      expect(prompt).not.toContain('Оставь язык клиента');
+    }
   });
 });
 
