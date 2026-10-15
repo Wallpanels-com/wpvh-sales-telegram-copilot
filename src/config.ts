@@ -1,5 +1,6 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
+import { assertAllowedHttpsBase } from './security.js';
 
 loadDotenv({ path: ['.env.local', '.env'], quiet: true });
 
@@ -43,10 +44,14 @@ const envSchema = z.object({
   AI_API_KEY: z.string().optional().default(''),
   AI_MODEL: z.string().optional().default(''),
   AI_BASE_URL: z.string().url().optional().or(z.literal('')),
+  AI_ALLOWED_HOSTS: z.string().default('api.openai.com,api.groq.com'),
   // Backward-compatible aliases for the original deployment contract.
   OPENAI_API_KEY: z.string().optional().default(''),
   OPENAI_MODEL: z.string().optional().default(''),
   AI_REPLY_MAX_CHARS: z.coerce.number().int().min(80).max(1000).default(240),
+  AI_MAX_CONTEXT_CHARS: z.coerce.number().int().min(10_000).max(500_000).default(120_000),
+  AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(128).max(8_192).default(2_500),
+  AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(180_000).default(90_000),
   AI_VALIDATE_ON_STARTUP: boolFromEnv.default(false),
   AI_RATE_LIMIT_MAX_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
   AI_RATE_LIMIT_BASE_MS: z.coerce.number().int().min(250).max(10000).default(1000),
@@ -69,6 +74,10 @@ const envSchema = z.object({
   POLLING_CHANNELS: z.string().default('SMS,Email,WhatsApp,Instagram,Facebook,Call'),
   POLLING_LOOKBACK_MINUTES: z.coerce.number().int().min(1).max(60).default(5),
   MAX_OPPORTUNITY_PAGES_PER_SALES: z.coerce.number().int().min(1).max(20).default(5),
+
+  EXTERNAL_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+  WEBHOOK_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(10).max(10_000).default(300),
+  TELEGRAM_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(5).max(1_000).default(60),
 
   GHL_API_BASE: z.string().url().default('https://services.leadconnectorhq.com'),
   GHL_API_VERSION: z.string().default('v3'),
@@ -94,6 +103,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const aiModel = parsed.AI_MODEL || parsed.OPENAI_MODEL || 'gpt-5.6-luna';
   if ((parsed.AI_PROVIDER === 'openai-compatible' || parsed.AI_PROVIDER === 'groq') && !parsed.AI_BASE_URL) {
     throw new Error('AI_BASE_URL is required when AI_PROVIDER=openai-compatible or groq');
+  }
+  assertAllowedHttpsBase(parsed.GHL_API_BASE, new Set(['services.leadconnectorhq.com']), 'GHL_API_BASE');
+  assertAllowedHttpsBase(parsed.GHL_CONTACT_URL_TEMPLATE, new Set(['app.gohighlevel.com']), 'GHL_CONTACT_URL_TEMPLATE');
+  if (parsed.AI_PROVIDER === 'groq' && parsed.AI_BASE_URL) {
+    assertAllowedHttpsBase(parsed.AI_BASE_URL, new Set(['api.groq.com']), 'AI_BASE_URL');
+  }
+  if (parsed.AI_PROVIDER === 'openai' && parsed.AI_BASE_URL) {
+    assertAllowedHttpsBase(parsed.AI_BASE_URL, new Set(['api.openai.com']), 'AI_BASE_URL');
+  }
+  if (parsed.AI_PROVIDER === 'openai-compatible' && parsed.AI_BASE_URL) {
+    const allowedHosts = new Set(parsed.AI_ALLOWED_HOSTS.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean));
+    if (!allowedHosts.size) throw new Error('AI_ALLOWED_HOSTS is required for AI_PROVIDER=openai-compatible');
+    assertAllowedHttpsBase(parsed.AI_BASE_URL, allowedHosts, 'AI_BASE_URL');
   }
   const shadowTestSalesGhlIds = new Set(parsed.SHADOW_TEST_SALES_GHL_IDS.split(',').map((x) => x.trim()).filter(Boolean));
   const shadowTestLocationIds = new Set(parsed.SHADOW_TEST_LOCATION_IDS.split(',').map((x) => x.trim()).filter(Boolean));

@@ -18,6 +18,7 @@ import { GhlClient } from './ghl.js';
 import { resolveRecipients } from './recipients.js';
 import { TelegramClient } from './telegram.js';
 import { normalizeWebhook } from './webhook-normalizer.js';
+import { auditRef, safeErrorMessage } from '../security.js';
 
 export class EventProcessor {
   private running = false;
@@ -59,15 +60,15 @@ export class EventProcessor {
           await this.processEvent(String(event.kind) as WebhookKind, event.payload, String(event.source));
           await this.db.markEventDone(String(event.id));
         } catch (error: any) {
-          this.logger.error({ eventId: event.id, kind: event.kind, err: safeError(error) }, 'event processing failed');
+          this.logger.error({ eventId: event.id, kind: event.kind, error: safeErrorMessage(error) }, 'event processing failed');
           const rateLimit = error instanceof AiRateLimitError ? error : null;
-          await this.db.markEventFailed(String(event.id), safeError(error), Number(event.attempts ?? 1), {
+          await this.db.markEventFailed(String(event.id), safeErrorMessage(error), Number(event.attempts ?? 1), {
             rateLimited: Boolean(rateLimit),
             retryAfterSeconds: rateLimit?.retryAfterSeconds
           });
         }
       } catch (error) {
-        this.logger.error({ err: safeError(error) }, 'processor loop error');
+        this.logger.error({ error: safeErrorMessage(error) }, 'processor loop error');
         await sleep(3000);
       }
     }
@@ -75,9 +76,9 @@ export class EventProcessor {
 
   async processEvent(kind: WebhookKind, payload: any, source = 'unknown') {
     const n = normalizeWebhook(kind, payload);
-    this.logger.info({ kind, source, locationId: n.locationId, contactId: n.contactId, messageId: n.messageId }, 'processing event');
+    this.logger.info({ kind, source, locationRef: auditRef(n.locationId), contactRef: auditRef(n.contactId), messageRef: auditRef(n.messageId) }, 'processing event');
     if (!shouldProcessShadowLocation(this.config, n.locationId)) {
-      this.logger.info({ kind, locationId: n.locationId, eventKey: n.eventKey }, 'event skipped by shadow location scope');
+      this.logger.info({ kind, locationRef: auditRef(n.locationId), eventKey: n.eventKey }, 'event skipped by shadow location scope');
       return;
     }
 
@@ -122,12 +123,12 @@ export class EventProcessor {
       contactId = conversation?.contactId;
     }
     if (!contactId) throw new Error('customer reply event has no contactId and could not resolve it');
-    this.logger.info({ eventKey: n.eventKey, contactId }, 'contact resolved');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(contactId) }, 'contact resolved');
 
     const context = await this.contextService.build({ brand, contactId, conversationId, messageId: inputMessageId });
-    this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, assignedGhlUserId: context.assignedGhlUserId ?? null }, 'assigned sales resolved');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), assignedSalesRef: auditRef(context.assignedGhlUserId) }, 'assigned sales resolved');
     if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'customer reply', context.contactId)) return;
-    this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, recentMessages: context.recentMessages.length }, 'context built');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length }, 'context built');
     const effectiveMessage = triggerMessage ?? context.triggerMessage;
     if (effectiveMessage?.direction && effectiveMessage.direction !== 'inbound') return;
     const effectiveMessageId = inputMessageId ?? effectiveMessage?.id;
@@ -141,7 +142,7 @@ export class EventProcessor {
     try {
       const lessons = await this.db.getLessons();
       const ai = await this.ai.analyzeReply(context, lessons);
-      this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, provider: this.config.AI_PROVIDER, model: this.config.aiModel }, 'Groq completed');
+      this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), provider: this.config.AI_PROVIDER, model: this.config.aiModel }, 'Groq completed');
       const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, context.assignedGhlUserId);
 
       const draft = buildReplyCard(this.config, this.ghl, context, ai, assignedSales?.name);
@@ -202,12 +203,12 @@ export class EventProcessor {
       }
     }
     if (!contactId) throw new Error('transcript event has no contactId');
-    this.logger.info({ eventKey: n.eventKey, contactId, callType }, 'contact resolved');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(contactId), callType }, 'contact resolved');
 
     const context = await this.contextService.build({ brand, contactId, conversationId: callMessage?.conversationId, messageId: inputMessageId });
-    this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, assignedGhlUserId: context.assignedGhlUserId ?? null }, 'assigned sales resolved');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), assignedSalesRef: auditRef(context.assignedGhlUserId) }, 'assigned sales resolved');
     if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'transcript', context.contactId)) return;
-    this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, recentMessages: context.recentMessages.length, callType }, 'context built');
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length, callType }, 'context built');
     callMessage ??= [...context.recentMessages].reverse().find(isCallMessage) ?? null;
     let messageId = inputMessageId ?? stringValue(voiceAiLog?.messageId) ?? callMessage?.id;
 
@@ -223,7 +224,7 @@ export class EventProcessor {
           const highLevelTranscript = flattenTranscript(raw);
           if (highLevelTranscript.trim()) transcript = highLevelTranscript;
         } catch (error) {
-          this.logger.warn({ eventKey: n.eventKey, messageId, err: safeError(error) }, 'normal call transcript lookup failed; checking Voice AI logs');
+          this.logger.warn({ eventKey: n.eventKey, messageRef: auditRef(messageId), error: safeErrorMessage(error) }, 'normal call transcript lookup failed; checking Voice AI logs');
         }
       }
       if (!transcript?.trim()) {
@@ -246,7 +247,7 @@ export class EventProcessor {
         transcript,
         previousMemory: context.relationshipSummary
       });
-      this.logger.info({ eventKey: n.eventKey, contactId: context.contactId, provider: this.config.AI_PROVIDER, model: this.config.aiModel, callType }, 'Groq completed');
+      this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), provider: this.config.AI_PROVIDER, model: this.config.aiModel, callType }, 'Groq completed');
 
       await this.db.saveCallAnalysis({
         locationId,
@@ -356,9 +357,9 @@ export class EventProcessor {
         const result = await this.telegram.sendMessage({ chatId: String(item.telegram_user_id), ...rendered });
         await this.db.recordDelivery(String(card.id), String(item.telegram_user_id), result.message_id, 'deferred');
         await this.db.markDeferredDone(String(item.id));
-        this.logger.info({ cardId: card.id, chatId: item.telegram_user_id, deferredId: item.id }, 'Telegram delivered');
+        this.logger.info({ cardId: card.id, recipientRef: auditRef(String(item.telegram_user_id)), deferredId: item.id }, 'Telegram delivered');
       } catch (error) {
-        this.logger.error({ deferredId: item.id, err: safeError(error) }, 'deferred delivery failed');
+        this.logger.error({ deferredId: item.id, error: safeErrorMessage(error) }, 'deferred delivery failed');
         await this.db.markDeferredPending(String(item.id));
       }
     }
@@ -435,9 +436,9 @@ export class EventProcessor {
       try {
         const result = await this.telegram.sendMessage({ chatId, text, keyboard });
         await this.db.recordDelivery(cardId, chatId, result.message_id, 'primary');
-        this.logger.info({ cardId, chatId }, 'Telegram delivered');
+        this.logger.info({ cardId, recipientRef: auditRef(chatId) }, 'Telegram delivered');
       } catch (error) {
-        this.logger.error({ chatId, cardId, err: safeError(error) }, 'Telegram delivery failed');
+        this.logger.error({ recipientRef: auditRef(chatId), cardId, error: safeErrorMessage(error) }, 'Telegram delivery failed');
       }
     }
   }
@@ -445,14 +446,14 @@ export class EventProcessor {
   private requireBrand(locationId?: string): BrandKey {
     if (!locationId) throw new Error('locationId missing');
     const brand = this.ghl.brandFromLocation(locationId);
-    if (!brand) throw new Error(`unknown HighLevel locationId: ${locationId}`);
+    if (!brand) throw new Error('unknown HighLevel locationId');
     return brand;
   }
 
   private shouldHandleAssignedSales(assignedGhlUserId: string | undefined, eventType: string, contactId: string): boolean {
     const allowed = shouldProcessAssignedSales(this.config, assignedGhlUserId);
     if (!allowed) {
-      this.logger.info({ eventType, contactId, assignedGhlUserId: assignedGhlUserId ?? null }, 'event skipped by shadow test scope');
+      this.logger.info({ eventType, contactRef: auditRef(contactId), assignedSalesRef: auditRef(assignedGhlUserId) }, 'event skipped by shadow test scope');
     }
     return allowed;
   }
@@ -489,4 +490,3 @@ function isCallMessage(message: GhlMessage): boolean {
 }
 
 function sleep(ms: number) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function safeError(error: any): string { return error instanceof Error ? error.message : String(error); }

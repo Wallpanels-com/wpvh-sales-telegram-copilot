@@ -9,6 +9,11 @@ import { canTelegramUserAccessCard } from '../services/recipients.js';
 import { canDeliverToTelegram, prependShadowTestPrefix } from '../services/delivery-policy.js';
 import { TelegramClient } from '../services/telegram.js';
 import { escapeHtml } from '../utils/html.js';
+import { auditRef, FixedWindowRateLimiter, safeErrorMessage, timingSafeSecretEqual } from '../security.js';
+
+const TELEGRAM_ID = /^-?\d{1,20}$/;
+const CALLBACK_ID = /^[A-Za-z0-9_-]{1,256}$/;
+const CARD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function registerTelegramRoute(
   app: FastifyInstance,
@@ -20,18 +25,31 @@ export async function registerTelegramRoute(
   ghl: GhlClient,
   briefing: BriefingService
 ) {
-  app.post('/webhooks/telegram', async (request, reply) => {
+  const telegramRateLimit = config.TELEGRAM_RATE_LIMIT_PER_MINUTE ?? 60;
+  const ingressLimiter = new FixedWindowRateLimiter(Math.max(telegramRateLimit * 10, 100));
+  const actorLimiter = new FixedWindowRateLimiter(telegramRateLimit);
+
+  app.post('/webhooks/telegram', { bodyLimit: 256 * 1024 }, async (request, reply) => {
     const secret = String(request.headers['x-telegram-bot-api-secret-token'] ?? '');
-    if (secret !== config.TELEGRAM_WEBHOOK_SECRET) {
+    if (!timingSafeSecretEqual(secret, config.TELEGRAM_WEBHOOK_SECRET)) {
       return reply.code(401).send({ ok: false });
     }
+    if (!ingressLimiter.allow(request.ip)) return reply.code(429).send({ ok: false });
     const update = request.body as any;
     const actorId = String(update?.callback_query?.from?.id ?? update?.message?.from?.id ?? '');
-    if (!actorId || !canDeliverToTelegram(config, actorId)) {
+    const chatId = String(update?.callback_query?.message?.chat?.id ?? update?.message?.chat?.id ?? '');
+    const chatType = String(update?.callback_query?.message?.chat?.type ?? update?.message?.chat?.type ?? '');
+    if (!TELEGRAM_ID.test(actorId) || !TELEGRAM_ID.test(chatId) || actorId !== chatId || chatType !== 'private') {
+      return reply.code(200).send({ ok: true });
+    }
+    const mappedUser = await db.getSalesByTelegramId(actorId);
+    const knownActor = Boolean(mappedUser || config.adminTelegramUserIds.includes(actorId)
+      || (config.SHADOW_TEST_ENABLED && actorId === config.SHADOW_TEST_RECIPIENT_TELEGRAM_ID));
+    if (!knownActor || !canDeliverToTelegram(config, actorId) || !actorLimiter.allow(actorId)) {
       return reply.code(200).send({ ok: true });
     }
     // Ack quickly; processing is lightweight and Telegram retries on transport failure.
-    void handleUpdate(update).catch((err) => app.log.error({ err }, 'telegram update failed'));
+    void handleUpdate(update).catch((error) => app.log.error({ actorRef: auditRef(actorId), error: safeErrorMessage(error) }, 'telegram update failed'));
     return reply.code(200).send({ ok: true });
   });
 
@@ -105,13 +123,17 @@ export async function registerTelegramRoute(
     const fromId = String(query.from?.id ?? '');
     const chatId = String(query.message?.chat?.id ?? fromId);
     const data = String(query.data ?? '');
-    const match = data.match(/^card:([0-9a-f-]{36}):(shorter|friendlier|rewrite)$/i);
-    if (!match) {
+    const parsed = parseCardCallback(data);
+    if (!CALLBACK_ID.test(id) || !TELEGRAM_ID.test(fromId) || chatId !== fromId || !parsed) {
+      if (CALLBACK_ID.test(id)) await telegram.answerCallbackQuery(id, 'Unknown action');
+      return;
+    }
+    const { cardId, mode } = parsed;
+    if (!CARD_ID.test(cardId)) {
       await telegram.answerCallbackQuery(id, 'Unknown action');
       return;
     }
-    const [, cardId, mode] = match;
-    const card = await db.getCard(cardId!);
+    const card = await db.getCard(cardId);
     if (!card || !(await canTelegramUserAccessCard(config, db, fromId, card))) {
       await telegram.answerCallbackQuery(id, 'Not authorized', true);
       return;
@@ -154,4 +176,11 @@ export async function registerTelegramRoute(
       ]
     });
   }
+}
+
+export function parseCardCallback(data: string): { cardId: string; mode: 'shorter' | 'friendlier' | 'rewrite' } | null {
+  if (data.length > 64) return null;
+  const match = data.match(/^card:([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):(shorter|friendlier|rewrite)$/i);
+  if (!match) return null;
+  return { cardId: match[1]!, mode: match[2]!.toLowerCase() as 'shorter' | 'friendlier' | 'rewrite' };
 }

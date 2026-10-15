@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GhlClient } from '../src/services/ghl.js';
+import { assertGhlApiPath, assertGhlReadOnlyMethod, GhlClient } from '../src/services/ghl.js';
 
 const config: any = {
   GHL_WP_LOCATION_ID: 'wp-location',
@@ -47,3 +47,15 @@ describe('HighLevel client safety', () => {
     expect(init?.method).toBe('GET');
   });
 });
+  it('technically blocks every non-GET method', () => {
+    expect(() => assertGhlReadOnlyMethod('GET')).not.toThrow();
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect(() => assertGhlReadOnlyMethod(method)).toThrow(/read-only/);
+    }
+  });
+
+  it('blocks protocol-relative and absolute paths to prevent SSRF', () => {
+    expect(() => assertGhlApiPath('/contacts/contact-1')).not.toThrow();
+    expect(() => assertGhlApiPath('//attacker.example/steal')).toThrow(/Invalid/);
+    expect(() => assertGhlApiPath('https://attacker.example/steal')).toThrow(/Invalid/);
+  });

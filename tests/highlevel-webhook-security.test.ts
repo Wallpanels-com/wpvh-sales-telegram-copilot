@@ -7,7 +7,8 @@ function config(): AppConfig {
   return {
     GHL_WEBHOOK_SHARED_SECRET: 'a-strong-shared-secret',
     GHL_WP_LOCATION_ID: 'wp-location',
-    GHL_VH_LOCATION_ID: 'vh-location'
+    GHL_VH_LOCATION_ID: 'vh-location',
+    WEBHOOK_RATE_LIMIT_PER_MINUTE: 300
   } as AppConfig;
 }
 
@@ -29,10 +30,16 @@ describe('HighLevel webhook security', () => {
     await app.close();
   });
 
-  it('rejects an invalid secret and an unknown location', async () => {
+  it('rejects a missing/invalid secret and an unknown location', async () => {
     const app = Fastify();
     const db = { enqueueEvent: async () => true } as any;
     await registerHighLevelRoutes(app, config(), db);
+
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?locationId=wp-location&contactId=contact-1'
+    });
+    expect(missing.statusCode).toBe(401);
 
     const unauthorized = await app.inject({
       method: 'POST',
@@ -44,7 +51,50 @@ describe('HighLevel webhook security', () => {
       method: 'POST',
       url: '/webhooks/highlevel/transcript-generated?secret=a-strong-shared-secret&locationId=other-location&contactId=contact-1'
     });
-    expect(unknownLocation.statusCode).toBe(403);
+    expect(unknownLocation.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('deduplicates identical event IDs at persistence', async () => {
+    const app = Fastify();
+    const keys = new Set<string>();
+    let processed = 0;
+    await registerHighLevelRoutes(app, config(), {
+      enqueueEvent: async (event: any) => {
+        if (keys.has(event.eventKey)) return false;
+        keys.add(event.eventKey);
+        processed += 1;
+        return true;
+      }
+    } as any);
+    const request = {
+      method: 'POST' as const,
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret',
+      payload: { locationId: 'wp-location', contactId: 'contact-1', eventId: 'event-1' }
+    };
+    expect((await app.inject(request)).json().accepted).toBe(true);
+    expect((await app.inject(request)).json().accepted).toBe(false);
+    expect(processed).toBe(1);
+    await app.close();
+  });
+
+  it('safely rejects malformed JSON and oversized payloads', async () => {
+    const app = Fastify();
+    await registerHighLevelRoutes(app, config(), { enqueueEvent: async () => true } as any);
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret',
+      headers: { 'content-type': 'application/json' },
+      payload: '{not-json'
+    });
+    expect(malformed.statusCode).toBe(400);
+
+    const oversized = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret',
+      payload: { locationId: 'wp-location', contactId: 'contact-1', padding: 'x'.repeat(1024 * 1024) }
+    });
+    expect(oversized.statusCode).toBe(413);
     await app.close();
   });
 

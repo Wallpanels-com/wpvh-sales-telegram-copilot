@@ -1,6 +1,13 @@
 import type { AppConfig } from '../config.js';
 
-type TelegramConfig = Pick<AppConfig, 'TELEGRAM_BOT_TOKEN' | 'TELEGRAM_WEBHOOK_SECRET'>;
+type TelegramConfig = Pick<AppConfig, 'TELEGRAM_BOT_TOKEN' | 'TELEGRAM_WEBHOOK_SECRET'> & {
+  EXTERNAL_REQUEST_TIMEOUT_MS?: number;
+};
+
+const ALLOWED_METHODS = new Set([
+  'getMe', 'getWebhookInfo', 'sendMessage', 'editMessageReplyMarkup',
+  'answerCallbackQuery', 'setWebhook', 'deleteWebhook', 'setMyCommands'
+]);
 
 export type InlineButton =
   | { text: string; callback_data: string }
@@ -77,14 +84,20 @@ export class TelegramClient {
   }
 
   private async call(method: string, payload: Record<string, unknown>): Promise<any> {
+    if (!ALLOWED_METHODS.has(method)) throw new Error('Unsupported Telegram API method');
     const res = await fetch(`${this.baseUrl}/${method}`, {
       method: 'POST',
+      signal: AbortSignal.timeout(this.config.EXTERNAL_REQUEST_TIMEOUT_MS ?? 30_000),
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    const data = await res.json().catch(() => null);
+    const declaredLength = Number(res.headers.get('content-length') ?? 0);
+    if (declaredLength > 1024 * 1024) throw new Error('Telegram response exceeded size limit');
+    const text = await res.text();
+    if (text.length > 1024 * 1024) throw new Error('Telegram response exceeded size limit');
+    const data = text ? JSON.parse(text) : null;
     if (!res.ok || !data?.ok) {
-      throw new Error(`Telegram ${method} failed: ${res.status} ${JSON.stringify(data)}`);
+      throw new Error(`Telegram ${method} failed: ${res.status}`);
     }
     return data.result;
   }

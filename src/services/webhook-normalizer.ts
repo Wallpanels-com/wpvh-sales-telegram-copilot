@@ -15,6 +15,7 @@ export type NormalizedWebhook = {
   voiceAiCallId?: string;
   callType?: 'normal_call' | 'voice_ai';
   eventTimestamp?: string;
+  sourceEventId?: string;
   eventKey: string;
   raw: any;
 };
@@ -62,13 +63,39 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
     voiceAiCallId: str(voiceAiCallId),
     callType: isVoiceAi ? 'voice_ai' : kind === 'transcript_generated' || kind === 'poll_call' ? 'normal_call' : undefined,
     eventTimestamp: str(timestamp),
+    sourceEventId: str(webhookId),
     eventKey,
     raw
   };
 }
 
+/** Store only routing identifiers required to process the event. CRM content is fetched
+ * from HighLevel at processing time and must not be retained in the webhook queue. */
+export function canonicalWebhookPayload(event: NormalizedWebhook): Record<string, string> {
+  const values: Record<string, string | undefined> = {
+    locationId: event.locationId,
+    contactId: event.contactId,
+    conversationId: event.conversationId,
+    messageId: event.messageId,
+    assignedUserId: event.assignedUserId,
+    dueDate: event.dueDate,
+    appointmentStart: event.appointmentStart,
+    voiceAiCallId: event.voiceAiCallId,
+    callType: event.callType,
+    eventTimestamp: event.eventTimestamp,
+    eventId: event.sourceEventId
+  };
+  return Object.fromEntries(Object.entries(values).filter((entry): entry is [string, string] => Boolean(entry[1])));
+}
+
 export function mergeQueryIntoPayload(body: any, query: Record<string, unknown>): any {
-  return { ...(typeof body === 'object' && body ? body : {}), ...query };
+  return { ...(isPlainObject(body) ? body : {}), ...query };
+}
+
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function first(obj: any, ...paths: string[]): any {

@@ -5,6 +5,7 @@ import { BriefingService } from './briefing.js';
 import { canDeliverToTelegram } from './delivery-policy.js';
 import { EventProcessor } from './processor.js';
 import { TelegramClient } from './telegram.js';
+import { auditRef, safeErrorMessage } from '../security.js';
 
 export class SchedulerService {
   constructor(
@@ -43,7 +44,7 @@ export class SchedulerService {
           await this.telegram.sendMessage({ chatId: adminId, text: brief.text });
         }
       } catch (error) {
-        this.logger.error({ salesUser: user.name, err: error instanceof Error ? error.message : String(error) }, 'daily brief failed');
+        this.logger.error({ salesRef: auditRef(user.id), error: safeErrorMessage(error) }, 'daily brief failed');
       }
     }
   }

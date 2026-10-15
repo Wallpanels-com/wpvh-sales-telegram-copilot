@@ -4,6 +4,8 @@ import type { Db } from '../db.js';
 import type { BrandKey, GhlMessage } from '../types.js';
 import { GhlClient } from './ghl.js';
 import { normalizeWebhook } from './webhook-normalizer.js';
+import { canonicalWebhookPayload } from './webhook-normalizer.js';
+import { safeErrorMessage } from '../security.js';
 
 export class GhlPoller {
   private timer: NodeJS.Timeout | null = null;
@@ -38,7 +40,7 @@ export class GhlPoller {
           try {
             await this.pollChannel(brand, channel);
           } catch (error) {
-            this.logger.error({ brand, channel, err: error instanceof Error ? error.message : String(error) }, 'poll channel failed');
+            this.logger.error({ brand, channel, error: safeErrorMessage(error) }, 'poll channel failed');
           }
         }
       }
@@ -86,7 +88,7 @@ export class GhlPoller {
         messageId: message.id,
         timestamp: message.dateAdded
       });
-      await this.db.enqueueEvent({ eventKey: n.eventKey, source: 'poller', kind: 'poll_call', payload: n.raw });
+      await this.db.enqueueEvent({ eventKey: n.eventKey, source: 'poller', kind: 'poll_call', payload: canonicalWebhookPayload(n) });
       return;
     }
 
@@ -98,6 +100,6 @@ export class GhlPoller {
       messageId: message.id,
       timestamp: message.dateAdded
     });
-    await this.db.enqueueEvent({ eventKey: n.eventKey, source: 'poller', kind: 'poll_message', payload: n.raw });
+    await this.db.enqueueEvent({ eventKey: n.eventKey, source: 'poller', kind: 'poll_message', payload: canonicalWebhookPayload(n) });
   }
 }

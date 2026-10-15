@@ -76,7 +76,7 @@ export class GhlClient {
   }
 
   async getContact(brand: BrandKey, contactId: string): Promise<any> {
-    const data = await this.getJson(brand, `/contacts/${encodeURIComponent(contactId)}`);
+    const data = await this.getJson(brand, `/contacts/${safeGhlId(contactId, 'contactId')}`);
     return data?.contact ?? data;
   }
 
@@ -86,13 +86,13 @@ export class GhlClient {
   }
 
   async getConversation(brand: BrandKey, conversationId: string): Promise<any> {
-    return await this.getJson(brand, `/conversations/${encodeURIComponent(conversationId)}`);
+    return await this.getJson(brand, `/conversations/${safeGhlId(conversationId, 'conversationId')}`);
   }
 
   async getMessages(brand: BrandKey, conversationId: string, limit = 20): Promise<GhlMessage[]> {
     const data = await this.getJson(
       brand,
-      `/conversations/${encodeURIComponent(conversationId)}/messages`,
+      `/conversations/${safeGhlId(conversationId, 'conversationId')}/messages`,
       { limit }
     );
     const wrapper = data?.messages;
@@ -101,7 +101,7 @@ export class GhlClient {
   }
 
   async getMessage(brand: BrandKey, messageId: string): Promise<GhlMessage | null> {
-    const data = await this.getJson(brand, `/conversations/messages/${encodeURIComponent(messageId)}`);
+    const data = await this.getJson(brand, `/conversations/messages/${safeGhlId(messageId, 'messageId')}`);
     return (data?.message ?? data ?? null) as GhlMessage | null;
   }
 
@@ -118,21 +118,22 @@ export class GhlClient {
   }
 
   async getTasks(brand: BrandKey, contactId: string): Promise<any[]> {
-    const data = await this.getJson(brand, `/contacts/${encodeURIComponent(contactId)}/tasks`);
+    const data = await this.getJson(brand, `/contacts/${safeGhlId(contactId, 'contactId')}/tasks`);
     return Array.isArray(data?.tasks) ? data.tasks : [];
   }
 
   async getTranscription(brand: BrandKey, locationId: string, messageId: string): Promise<any> {
+    if (locationId !== this.locationId(brand)) throw new Error('HighLevel location mismatch');
     return await this.getJson(
       brand,
-      `/conversations/locations/${encodeURIComponent(locationId)}/messages/${encodeURIComponent(messageId)}/transcription`
+      `/conversations/locations/${safeGhlId(locationId, 'locationId')}/messages/${safeGhlId(messageId, 'messageId')}/transcription`
     );
   }
 
   async getVoiceAiCallLog(brand: BrandKey, callId: string): Promise<any> {
     const data = await this.getJson(
       brand,
-      `/voice-ai/dashboard/call-logs/${encodeURIComponent(callId)}`,
+      `/voice-ai/dashboard/call-logs/${safeGhlId(callId, 'callId')}`,
       { locationId: this.locationId(brand) },
       '2021-07-28'
     );
@@ -145,7 +146,7 @@ export class GhlClient {
       '/voice-ai/dashboard/call-logs',
       {
         locationId: this.locationId(brand),
-        contactId,
+        contactId: validateGhlId(contactId, 'contactId'),
         page: 1,
         pageSize: 10,
         sortBy: 'createdAt',
@@ -201,14 +202,28 @@ export class GhlClient {
     query?: Record<string, string | number | boolean | undefined>,
     version?: string
   ): Promise<any> {
+    return await this.requestJson('GET', brand, path, query, version);
+  }
+
+  private async requestJson(
+    method: string,
+    brand: BrandKey,
+    path: string,
+    query?: Record<string, string | number | boolean | undefined>,
+    version?: string
+  ): Promise<any> {
+    assertGhlReadOnlyMethod(method);
+    assertGhlApiPath(path);
     const url = new URL(path, this.config.GHL_API_BASE);
+    if (url.origin !== new URL(this.config.GHL_API_BASE).origin) throw new Error('Invalid HighLevel API path');
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value === undefined || value === '') continue;
       url.searchParams.set(key, String(value));
     }
 
     const res = await fetch(url, {
-      method: 'GET',
+      method,
+      signal: AbortSignal.timeout(this.config.EXTERNAL_REQUEST_TIMEOUT_MS ?? 30_000),
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${this.token(brand)}`,
@@ -216,7 +231,10 @@ export class GhlClient {
       }
     });
 
+    const declaredLength = Number(res.headers.get('content-length') ?? 0);
+    if (declaredLength > 5 * 1024 * 1024) throw new Error('HighLevel response exceeded size limit');
     const text = await res.text();
+    if (text.length > 5 * 1024 * 1024) throw new Error('HighLevel response exceeded size limit');
     let data: any = null;
     try {
       data = text ? JSON.parse(text) : null;
@@ -225,11 +243,31 @@ export class GhlClient {
     }
 
     if (!res.ok) {
-      const err = new Error(`HighLevel GET ${path} failed: ${res.status}`) as Error & { status?: number; details?: unknown };
+      const err = new Error(`HighLevel GET failed: ${res.status}`) as Error & { status?: number };
       err.status = res.status;
-      err.details = data;
       throw err;
     }
     return data;
   }
+}
+
+export function assertGhlReadOnlyMethod(method: string): void {
+  if (method.toUpperCase() !== 'GET') throw new Error('HighLevel client is read-only; non-GET request blocked');
+}
+
+export function assertGhlApiPath(path: string): void {
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('://') || /[\r\n]/.test(path)) {
+    throw new Error('Invalid HighLevel API path');
+  }
+}
+
+function safeGhlId(value: string, label: string): string {
+  return encodeURIComponent(validateGhlId(value, label));
+}
+
+function validateGhlId(value: string, label: string): string {
+  if (!value || value.length > 160 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value)) {
+    throw new Error(`Invalid HighLevel ${label}`);
+  }
+  return value;
 }

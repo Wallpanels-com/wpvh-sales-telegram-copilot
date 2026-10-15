@@ -89,14 +89,19 @@ export function createDb(config: AppConfig) {
     },
 
     async markEventDone(id: string) {
-      await sql`UPDATE webhook_events SET status='done', processed_at=now(), processing_started_at=NULL, last_error=NULL WHERE id=${id}`;
+      await sql`
+        UPDATE webhook_events
+        SET status='done', processed_at=now(), processing_started_at=NULL, last_error=NULL,
+            payload='{"redacted":true}'::jsonb
+        WHERE id=${id}
+      `;
     },
 
     async markEventDiscarded(id: string, reason: string) {
       await sql`
         UPDATE webhook_events
         SET status='discarded', processed_at=now(), processing_started_at=NULL,
-            last_error=${reason.slice(0, 2000)}
+            last_error=${reason.slice(0, 2000)}, payload='{"redacted":true}'::jsonb
         WHERE id=${id}
       `;
     },
@@ -113,7 +118,8 @@ export function createDb(config: AppConfig) {
       const terminal = !options.rateLimited && attempts >= 7;
       await sql`
         UPDATE webhook_events
-        SET status=${terminal ? 'failed' : 'retry'}, last_error=${error.slice(0, 2000)}, next_attempt_at=${next}, processing_started_at=NULL
+        SET status=${terminal ? 'failed' : 'retry'}, last_error=${error.slice(0, 2000)}, next_attempt_at=${next}, processing_started_at=NULL,
+            payload=CASE WHEN ${terminal} THEN '{"redacted":true}'::jsonb ELSE payload END
         WHERE id=${id}
       `;
     },
