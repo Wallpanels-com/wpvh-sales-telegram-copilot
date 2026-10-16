@@ -8,13 +8,23 @@ export function isShadowTestActive(config: AppConfig, now = Date.now()): boolean
 }
 
 export function shouldProcessAssignedSales(config: AppConfig, assignedGhlUserId?: string): boolean {
-  if (!config.SHADOW_TEST_ENABLED) return true;
-  return isShadowTestActive(config) && Boolean(assignedGhlUserId && config.shadowTestSalesGhlIds.has(assignedGhlUserId));
+  if (config.SHADOW_TEST_ENABLED) {
+    return isShadowTestActive(config) && Boolean(assignedGhlUserId && config.shadowTestSalesGhlIds.has(assignedGhlUserId));
+  }
+  if (config.productionSalesGhlIds?.size) {
+    return Boolean(assignedGhlUserId && config.productionSalesGhlIds.has(assignedGhlUserId));
+  }
+  return true;
 }
 
 export function shouldProcessShadowLocation(config: AppConfig, locationId?: string): boolean {
-  if (!config.SHADOW_TEST_ENABLED) return true;
-  return isShadowTestActive(config) && Boolean(locationId && config.shadowTestLocationIds.has(locationId));
+  if (config.SHADOW_TEST_ENABLED) {
+    return isShadowTestActive(config) && Boolean(locationId && config.shadowTestLocationIds.has(locationId));
+  }
+  if (config.productionLocationIds?.size) {
+    return Boolean(locationId && config.productionLocationIds.has(locationId));
+  }
+  return true;
 }
 
 export function isEventAfterShadowStart(config: AppConfig, eventCreatedAt?: string | Date): boolean {

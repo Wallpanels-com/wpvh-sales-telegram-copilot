@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveRecipients } from '../src/services/recipients.js';
+import { shouldProcessAssignedSales, shouldProcessShadowLocation } from '../src/services/delivery-policy.js';
 
 describe('recipient routing', () => {
   it('routes to admins and the assigned sales only', async () => {
@@ -46,5 +47,19 @@ describe('recipient routing', () => {
     const result = await resolveRecipients(config, db, 'wp', 'mary-ghl');
     expect(result.recipients).toEqual(['dmitry']);
     expect(result.assignedSales?.name).toBe('Mary Razumna');
+  });
+
+  it('keeps production scoped to WallPanels and the configured sales owners', () => {
+    const config: any = {
+      SHADOW_TEST_ENABLED: false,
+      productionLocationIds: new Set(['wp-location']),
+      productionSalesGhlIds: new Set(['mary-ghl', 'anton-ghl'])
+    };
+    expect(shouldProcessShadowLocation(config, 'wp-location')).toBe(true);
+    expect(shouldProcessShadowLocation(config, 'vh-location')).toBe(false);
+    expect(shouldProcessAssignedSales(config, 'mary-ghl')).toBe(true);
+    expect(shouldProcessAssignedSales(config, 'anton-ghl')).toBe(true);
+    expect(shouldProcessAssignedSales(config, 'kate-ghl')).toBe(false);
+    expect(shouldProcessAssignedSales(config)).toBe(false);
   });
 });

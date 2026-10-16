@@ -143,6 +143,11 @@ export class GhlClient {
     return data?.calendar ?? data ?? null;
   }
 
+  async getWorkflows(brand: BrandKey): Promise<any[]> {
+    const data = await this.getJson(brand, '/workflows/', { locationId: this.locationId(brand) });
+    return Array.isArray(data?.workflows) ? data.workflows : [];
+  }
+
   async getTranscription(brand: BrandKey, locationId: string, messageId: string): Promise<any> {
     if (locationId !== this.locationId(brand)) throw new Error('HighLevel location mismatch');
     return await this.getJson(

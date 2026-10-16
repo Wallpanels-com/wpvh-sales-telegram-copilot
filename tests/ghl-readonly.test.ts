@@ -51,7 +51,9 @@ describe('HighLevel client safety', () => {
     const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
       const body = String(url).includes('/tasks/')
         ? { task: { id: 'task-1', completed: false } }
-        : { event: { id: 'appointment-1', status: 'confirmed' } };
+        : String(url).includes('/workflows/')
+          ? { workflows: [{ id: 'workflow-1', status: 'published' }] }
+          : { event: { id: 'appointment-1', status: 'confirmed' } };
       return new Response(JSON.stringify(body), {
         status: 200,
         headers: { 'content-type': 'application/json' }
@@ -62,11 +64,14 @@ describe('HighLevel client safety', () => {
 
     await ghl.getTask('wp', 'contact-1', 'task-1');
     await ghl.getAppointment('wp', 'appointment-1');
+    await ghl.getWorkflows('wp');
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/contacts/contact-1/tasks/task-1');
     expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/calendars/events/appointments/appointment-1');
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.method).toBe('GET');
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.method).toBe('GET');
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/workflows/?locationId=wp-location');
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit | undefined)?.method).toBe('GET');
   });
 });
   it('technically blocks every non-GET method', () => {

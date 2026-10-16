@@ -5,7 +5,7 @@ type TelegramConfig = Pick<AppConfig, 'TELEGRAM_BOT_TOKEN' | 'TELEGRAM_WEBHOOK_S
 };
 
 const ALLOWED_METHODS = new Set([
-  'getMe', 'getWebhookInfo', 'sendMessage', 'editMessageReplyMarkup',
+  'getMe', 'getChat', 'getWebhookInfo', 'sendMessage', 'editMessageReplyMarkup',
   'answerCallbackQuery', 'setWebhook', 'deleteWebhook', 'setMyCommands'
 ]);
 
@@ -27,6 +27,10 @@ export class TelegramClient {
 
   async getWebhookInfo(): Promise<any> {
     return this.call('getWebhookInfo', {});
+  }
+
+  async getChat(chatId: string): Promise<any> {
+    return this.call('getChat', { chat_id: chatId });
   }
 
   async sendMessage(input: {

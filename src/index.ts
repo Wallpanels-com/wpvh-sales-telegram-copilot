@@ -9,6 +9,7 @@ import { GhlPoller } from './services/poller.js';
 import { EventProcessor } from './services/processor.js';
 import { SchedulerService } from './services/scheduler.js';
 import { TelegramClient } from './services/telegram.js';
+import { runPreProductionChecks } from './services/preproduction.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerHighLevelRoutes } from './routes/highlevel.js';
 import { registerTelegramRoute } from './routes/telegram.js';
@@ -93,6 +94,7 @@ app.get('/', async () => ({
 
 app.addHook('onReady', async () => {
   await db.recoverStuckWork();
+  await runPreProductionChecks(config, db, ghl, telegram, app.log);
   if (config.AI_VALIDATE_ON_STARTUP) {
     try {
       await ai.validateConnection();

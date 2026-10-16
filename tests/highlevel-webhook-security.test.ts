@@ -8,6 +8,7 @@ function config(): AppConfig {
     GHL_WEBHOOK_SHARED_SECRET: 'a-strong-shared-secret',
     GHL_WP_LOCATION_ID: 'wp-location',
     GHL_VH_LOCATION_ID: 'vh-location',
+    GHL_WEBHOOK_PREVIOUS_SECRET: '',
     WEBHOOK_RATE_LIMIT_PER_MINUTE: 300
   } as AppConfig;
 }
@@ -27,6 +28,32 @@ describe('HighLevel webhook security', () => {
     expect(response.statusCode).toBe(200);
     expect(saved.payload.secret).toBeUndefined();
     expect(saved.payload.locationId).toBe('wp-location');
+    await app.close();
+  });
+
+  it('accepts the previous secret during a zero-downtime rotation window', async () => {
+    const app = Fastify();
+    let saved = false;
+    await registerHighLevelRoutes(app, {
+      ...config(),
+      GHL_WEBHOOK_SHARED_SECRET: 'new-strong-shared-secret',
+      GHL_WEBHOOK_PREVIOUS_SECRET: 'old-strong-shared-secret'
+    }, {
+      enqueueEvent: async () => { saved = true; return true; }
+    } as any);
+
+    const oldSecret = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=old-strong-shared-secret&locationId=wp-location&contactId=contact-1'
+    });
+    expect(oldSecret.statusCode).toBe(200);
+    expect(saved).toBe(true);
+
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=retired-secret-value&locationId=wp-location&contactId=contact-1'
+    });
+    expect(invalid.statusCode).toBe(401);
     await app.close();
   });
 

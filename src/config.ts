@@ -39,6 +39,8 @@ const envSchema = z.object({
     (value) => !value || !Number.isNaN(Date.parse(value)),
     'SHADOW_TEST_UNTIL must be an ISO date/time or empty'
   ),
+  PRODUCTION_SALES_GHL_IDS: z.string().default(''),
+  PRODUCTION_LOCATION_IDS: z.string().default(''),
 
   AI_PROVIDER: z.enum(['openai', 'openai-compatible', 'groq']).default('openai'),
   AI_API_KEY: z.string().optional().default(''),
@@ -61,6 +63,10 @@ const envSchema = z.object({
   GHL_VH_LOCATION_ID: z.string().min(1),
   GHL_VH_TOKEN: z.string().min(1),
   GHL_WEBHOOK_SHARED_SECRET: z.string().min(16),
+  GHL_WEBHOOK_PREVIOUS_SECRET: z.string().default('').refine(
+    (value) => !value || value.length >= 16,
+    'GHL_WEBHOOK_PREVIOUS_SECRET must be at least 16 characters or empty'
+  ),
 
   TIMEZONE: z.string().default('America/New_York'),
   WORK_START: z.string().regex(/^\d{2}:\d{2}$/).default('08:45'),
@@ -90,6 +96,8 @@ export type AppConfig = z.infer<typeof envSchema> & {
   shadowTestSalesGhlIds: Set<string>;
   shadowTestLocationIds: Set<string>;
   shadowTestSalesLabels: Map<string, string>;
+  productionSalesGhlIds: Set<string>;
+  productionLocationIds: Set<string>;
   workDays: Set<number>;
   pollingChannels: string[];
   aiApiKey: string;
@@ -119,6 +127,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const shadowTestSalesGhlIds = new Set(parsed.SHADOW_TEST_SALES_GHL_IDS.split(',').map((x) => x.trim()).filter(Boolean));
   const shadowTestLocationIds = new Set(parsed.SHADOW_TEST_LOCATION_IDS.split(',').map((x) => x.trim()).filter(Boolean));
+  const productionSalesGhlIds = new Set(parsed.PRODUCTION_SALES_GHL_IDS.split(',').map((x) => x.trim()).filter(Boolean));
+  const productionLocationIds = new Set(parsed.PRODUCTION_LOCATION_IDS.split(',').map((x) => x.trim()).filter(Boolean));
   let shadowLabelsRaw: Record<string, unknown>;
   try {
     shadowLabelsRaw = JSON.parse(parsed.SHADOW_TEST_SALES_LABELS_JSON || '{}');
@@ -151,6 +161,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     shadowTestSalesGhlIds,
     shadowTestLocationIds,
     shadowTestSalesLabels,
+    productionSalesGhlIds,
+    productionLocationIds,
     workDays: new Set(parsed.WORK_DAYS.split(',').map((x) => Number(x.trim())).filter((x) => x >= 1 && x <= 7)),
     pollingChannels: parsed.POLLING_CHANNELS.split(',').map((x) => x.trim()).filter(Boolean),
     aiApiKey,

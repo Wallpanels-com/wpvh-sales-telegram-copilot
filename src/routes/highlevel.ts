@@ -20,8 +20,10 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
       const query = (request.query ?? {}) as Record<string, unknown>;
       const headerSecret = String(request.headers['x-webhook-secret'] ?? '');
       const querySecret = String(query.secret ?? '');
-      if (!timingSafeSecretEqual(headerSecret, config.GHL_WEBHOOK_SHARED_SECRET)
-        && !timingSafeSecretEqual(querySecret, config.GHL_WEBHOOK_SHARED_SECRET)) {
+      const acceptedSecrets = [config.GHL_WEBHOOK_SHARED_SECRET, config.GHL_WEBHOOK_PREVIOUS_SECRET].filter(Boolean);
+      const presentedSecrets = [headerSecret, querySecret].filter(Boolean);
+      const authenticated = presentedSecrets.some((candidate) => acceptedSecrets.some((expected) => timingSafeSecretEqual(candidate, expected)));
+      if (!authenticated) {
         return reply.code(401).send({ ok: false, error: 'unauthorized' });
       }
 
