@@ -1,6 +1,6 @@
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
-import type { BrandKey, GhlMessage, WebhookKind } from '../types.js';
+import type { BrandKey, ClientContext, GhlMessage, GhlTask, WebhookKind } from '../types.js';
 import { sha256 } from '../utils/hash.js';
 import { isWithinWorkHours, nextWorkStart } from '../utils/time.js';
 import { AiRateLimitError, AiService } from './ai.js';
@@ -290,26 +290,47 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('task reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId) }, 'contact resolved');
     const assignedGhlUserId = context.assignedGhlUserId;
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), assignedSalesRef: auditRef(assignedGhlUserId) }, 'assigned sales resolved');
     if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'task reminder', context.contactId)) return;
+    const tasks = n.taskId
+      ? [await this.ghl.getTask(brand, context.contactId, n.taskId)].filter((task): task is GhlTask => Boolean(task))
+      : await this.ghl.getTasks(brand, context.contactId);
+    const task = selectReminderTask(tasks, n.taskId, n.dueDate);
+    if (!task) throw new Error('task reminder could not resolve current HighLevel task');
+    if (task.contactId && task.contactId !== context.contactId) {
+      throw new Error('task reminder HighLevel contact mismatch');
+    }
+    if (task.completed === true || ['completed', 'done', 'closed'].includes(String(task.status ?? '').toLowerCase())) {
+      this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), taskRef: auditRef(task.id) }, 'completed task reminder skipped');
+      return;
+    }
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length }, 'context built');
     const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
-    const taskTitle = n.taskTitle ?? context.openTasks[0]?.title ?? 'Task due';
-    const dueDate = n.dueDate ?? context.openTasks[0]?.dueDate;
+    const taskTitle = task.title ?? 'Task due';
+    const dueDate = task.dueDate ?? n.dueDate;
+    const overdue = isPastDue(dueDate);
+    const brief = buildTaskBrief(context);
     const card = buildTaskReminderCard(this.config, this.ghl, {
       brandLabel: context.brandLabel,
       locationId: context.locationId,
       contactId: context.contactId,
       contactName: context.contactName,
       taskTitle,
+      taskBody: task.body,
       dueDate,
+      overdue,
+      context: brief,
+      pipeline: context.pipelineName,
       stage: context.stageName,
       assignedName: assignedSales?.name
     });
     const cardId = await this.db.createCard({
       kind: 'task', brand, locationId: context.locationId, contactId: context.contactId,
       assignedGhlUserId, contactName: context.contactName,
-      stageName: context.stageName, nextAction: taskTitle, priority: 'high', shouldReply: false,
-      payload: { dueDate }
+      stageName: context.stageName, contextSummary: brief, nextAction: taskTitle, priority: overdue ? 'high' : 'medium', shouldReply: false,
+      payload: { taskBody: task.body, dueDate, overdue, pipelineName: context.pipelineName }
     });
     await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, card.text, assignedSales?.name, assignedGhlUserId), card.keyboard);
   }
@@ -318,24 +339,65 @@ export class EventProcessor {
     const brand = this.requireBrand(n.locationId);
     if (!n.contactId) throw new Error('appointment reminder missing contactId');
     const context = await this.contextService.build({ brand, contactId: n.contactId, conversationId: n.conversationId });
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId) }, 'contact resolved');
     const assignedGhlUserId = context.assignedGhlUserId;
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), assignedSalesRef: auditRef(assignedGhlUserId) }, 'assigned sales resolved');
     if (!this.shouldHandleAssignedSales(assignedGhlUserId, 'appointment reminder', context.contactId)) return;
+    const appointment = n.appointmentId ? await this.ghl.getAppointment(brand, n.appointmentId) : null;
+    if (appointment?.contactId && appointment.contactId !== context.contactId) {
+      throw new Error('appointment reminder HighLevel contact mismatch');
+    }
+    if (appointment?.locationId && appointment.locationId !== context.locationId) {
+      throw new Error('appointment reminder HighLevel location mismatch');
+    }
+    const appointmentStatus = String(
+      appointment?.status ?? appointment?.appointmentStatus ?? n.appointmentStatus ?? context.nextAppointment?.status ?? ''
+    ).toLowerCase();
+    if (['cancelled', 'canceled', 'invalid'].includes(appointmentStatus)) {
+      this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), appointmentRef: auditRef(n.appointmentId) }, 'cancelled appointment reminder skipped');
+      return;
+    }
+    const appointmentStart = appointment?.startTime ?? n.appointmentStart ?? context.nextAppointment?.startTime;
+    if (!appointmentStart) throw new Error('appointment reminder missing current appointment start time');
+    const calendarId = appointment?.calendarId ?? n.calendarId;
+    let calendarName = n.calendarName;
+    if (calendarId) {
+      try {
+        const calendar = await this.ghl.getCalendar(brand, calendarId);
+        calendarName = stringValue(calendar?.name) ?? calendarName;
+      } catch (error) {
+        this.logger.warn({ eventKey: n.eventKey, calendarRef: auditRef(calendarId), error: safeErrorMessage(error) }, 'calendar lookup failed; using webhook context');
+      }
+    }
+    const latestCall = await this.db.getLatestCallContext(context.locationId, context.contactId);
+    const briefItems = buildAppointmentBrief(context, asStringList(latestCall?.client_needs));
+    this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length }, 'context built');
     const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
-    const brief = [context.relationshipSummary, context.lastCallSummary].filter(Boolean).join(' ');
     const card = buildAppointmentCard(this.config, this.ghl, {
       brandLabel: context.brandLabel,
       locationId: context.locationId,
       contactId: context.contactId,
       contactName: context.contactName,
-      startTime: n.appointmentStart,
-      context: brief || 'Open the client in HighLevel to review recent context.',
+      startTime: appointmentStart,
+      appointmentTitle: appointment?.title ?? n.appointmentTitle ?? context.nextAppointment?.title,
+      calendarName,
+      pipeline: context.pipelineName,
+      stage: context.stageName,
+      briefItems,
       assignedName: assignedSales?.name
     });
+    const brief = briefItems.join('\n');
     const cardId = await this.db.createCard({
       kind: 'appointment', brand, locationId: context.locationId, contactId: context.contactId,
       assignedGhlUserId, contactName: context.contactName,
       stageName: context.stageName, contextSummary: brief, nextAction: 'Prepare for appointment', priority: 'high', shouldReply: false,
-      payload: { startTime: n.appointmentStart }
+      payload: {
+        startTime: appointmentStart,
+        appointmentTitle: appointment?.title ?? n.appointmentTitle ?? context.nextAppointment?.title,
+        calendarName,
+        pipelineName: context.pipelineName,
+        briefItems
+      }
     });
     await this.deliverOrDefer(cardId, recipients, prependShadowTestPrefix(this.config, card.text, assignedSales?.name, assignedGhlUserId), card.keyboard);
   }
@@ -403,7 +465,9 @@ export class EventProcessor {
       const built = buildTaskReminderCard(this.config, this.ghl, {
         brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
         contactName: String(card.contact_name ?? 'Client'), taskTitle: String(card.next_action ?? 'Task due'),
-        dueDate: card.payload?.dueDate, stage: card.stage_name ? String(card.stage_name) : undefined, assignedName: assignedSales?.name
+        taskBody: card.payload?.taskBody, dueDate: card.payload?.dueDate, overdue: Boolean(card.payload?.overdue),
+        context: card.context_summary ? String(card.context_summary) : undefined,
+        pipeline: card.payload?.pipelineName, stage: card.stage_name ? String(card.stage_name) : undefined, assignedName: assignedSales?.name
       });
       return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined), keyboard: built.keyboard };
     }
@@ -411,7 +475,9 @@ export class EventProcessor {
       const built = buildAppointmentCard(this.config, this.ghl, {
         brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
         contactName: String(card.contact_name ?? 'Client'), startTime: card.payload?.startTime,
-        context: card.context_summary ? String(card.context_summary) : undefined, assignedName: assignedSales?.name
+        appointmentTitle: card.payload?.appointmentTitle, calendarName: card.payload?.calendarName,
+        pipeline: card.payload?.pipelineName, stage: card.stage_name ? String(card.stage_name) : undefined,
+        briefItems: Array.isArray(card.payload?.briefItems) ? card.payload.briefItems.map(String) : [], assignedName: assignedSales?.name
       });
       return { text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined), keyboard: built.keyboard };
     }
@@ -457,6 +523,86 @@ export class EventProcessor {
     }
     return allowed;
   }
+}
+
+function selectReminderTask(tasks: GhlTask[], taskId?: string, dueDate?: string): GhlTask | undefined {
+  if (taskId) {
+    const exact = tasks.find((task) => task.id === taskId);
+    if (exact) return exact;
+  }
+
+  const targetDue = dueDate ? Date.parse(dueDate) : Number.NaN;
+  if (Number.isFinite(targetDue)) {
+    const closest = tasks
+      .map((task) => ({ task, delta: Math.abs(Date.parse(String(task.dueDate ?? '')) - targetDue) }))
+      .filter(({ delta }) => Number.isFinite(delta))
+      .sort((a, b) => a.delta - b.delta)[0];
+    if (closest && closest.delta <= 5 * 60_000) return closest.task;
+  }
+
+  return tasks
+    .filter((task) => task.completed !== true && !['completed', 'done', 'closed'].includes(String(task.status ?? '').toLowerCase()))
+    .sort((a, b) => safeDateValue(a.dueDate) - safeDateValue(b.dueDate))[0];
+}
+
+function safeDateValue(value?: string): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function isPastDue(dueDate?: string): boolean {
+  if (!dueDate) return false;
+  const parsed = Date.parse(dueDate);
+  return Number.isFinite(parsed) && parsed < Date.now();
+}
+
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
+    : [];
+}
+
+function cleanBriefItem(value: string | undefined, maxLength = 300): string | undefined {
+  const compact = value?.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
+}
+
+function buildTaskBrief(context: ClientContext): string {
+  const items = [
+    cleanBriefItem(context.relationshipSummary, 320),
+    context.lastCallSummary ? cleanBriefItem(`Last call: ${context.lastCallSummary}`, 320) : undefined,
+    context.commitments[0] ? cleanBriefItem(`Commitment: ${context.commitments[0]}`, 260) : undefined,
+    context.nextSteps[0] ? cleanBriefItem(`Next step: ${context.nextSteps[0]}`, 260) : undefined
+  ].filter((item): item is string => Boolean(item)).slice(0, 2);
+
+  return items.join('\n') || 'Review the current client record in HighLevel before completing this task.';
+}
+
+function buildAppointmentBrief(context: ClientContext, clientNeeds: string[]): string[] {
+  const lastInbound = [...context.recentMessages]
+    .reverse()
+    .find((message) => message.direction === 'inbound' && message.body?.trim())?.body;
+  const candidates = [
+    ...clientNeeds.slice(0, 2).map((item) => `Need: ${item}`),
+    context.importantFacts[0] ? `Client fact: ${context.importantFacts[0]}` : undefined,
+    context.lastCallSummary ? `Last call: ${context.lastCallSummary}` : undefined,
+    context.objections[0] ? `Objection: ${context.objections[0]}` : undefined,
+    context.commitments[0] ? `Commitment: ${context.commitments[0]}` : undefined,
+    context.nextSteps[0] ? `Next step: ${context.nextSteps[0]}` : undefined,
+    !context.lastCallSummary && lastInbound ? `Latest client message: ${lastInbound}` : undefined,
+    context.relationshipSummary
+  ];
+  const unique = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    const item = cleanBriefItem(candidate, 300);
+    if (!item || unique.has(item)) continue;
+    unique.add(item);
+    result.push(item);
+    if (result.length === 6) break;
+  }
+  return result.length ? result : ['Review the current client record in HighLevel before the meeting.'];
 }
 
 function selectRecentVoiceAiLog(logs: any[], eventTimestamp?: string): any | null {

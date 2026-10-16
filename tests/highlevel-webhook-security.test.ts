@@ -78,6 +78,28 @@ describe('HighLevel webhook security', () => {
     await app.close();
   });
 
+  it('deduplicates native reminder retries without a workflow event ID', async () => {
+    const app = Fastify();
+    const keys = new Set<string>();
+    await registerHighLevelRoutes(app, config(), {
+      enqueueEvent: async (event: any) => {
+        if (keys.has(event.eventKey)) return false;
+        keys.add(event.eventKey);
+        return true;
+      }
+    } as any);
+    const request = {
+      method: 'POST' as const,
+      url: '/webhooks/highlevel/task-reminder?secret=a-strong-shared-secret&locationId=wp-location&contactId=contact-1',
+      payload: { task: { title: 'Call client', dueDate: '2026-10-17T15:00:00.000Z' } }
+    };
+
+    expect((await app.inject(request)).json()).toMatchObject({ ok: true, accepted: true });
+    expect((await app.inject(request)).json()).toMatchObject({ ok: true, accepted: false });
+    expect(keys.size).toBe(1);
+    await app.close();
+  });
+
   it('accepts HighLevel timestamp punctuation in an opaque event ID without weakening resource ID validation', async () => {
     const app = Fastify();
     let saved: any;

@@ -46,6 +46,28 @@ describe('HighLevel client safety', () => {
     expect(String(url)).toContain('cursor=cursor-1');
     expect(init?.method).toBe('GET');
   });
+
+  it('loads tasks and appointments through GET-only endpoints', async () => {
+    const fetchMock = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
+      const body = String(url).includes('/tasks/')
+        ? { task: { id: 'task-1', completed: false } }
+        : { event: { id: 'appointment-1', status: 'confirmed' } };
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const ghl = new GhlClient(config);
+
+    await ghl.getTask('wp', 'contact-1', 'task-1');
+    await ghl.getAppointment('wp', 'appointment-1');
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/contacts/contact-1/tasks/task-1');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain('/calendars/events/appointments/appointment-1');
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.method).toBe('GET');
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.method).toBe('GET');
+  });
 });
   it('technically blocks every non-GET method', () => {
     expect(() => assertGhlReadOnlyMethod('GET')).not.toThrow();

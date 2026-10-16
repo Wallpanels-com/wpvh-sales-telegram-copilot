@@ -38,25 +38,34 @@ https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/transcript-generated?secret=YOUR_
 
 The backend resolves the newest Call message for the contact, then loads the full transcript through HighLevel's read-only transcription endpoint. Do not put the full transcript in the URL. If the standard Webhook action includes it in the POST body, the backend can use that payload as a fallback.
 
-## 3. Optional Task Reminder
+## 3. Task Reminder
 
-For a HighLevel Task Reminder workflow, POST to:
+Create a separate WallPanels workflow:
+
+1. Trigger: **Task Reminder**.
+2. Set the reminder timing required by the team.
+3. Add the standard **Webhook** action (POST) with this URL:
 
 ```
 https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/task-reminder?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
 ```
 
-The bot also builds a daily task briefing from read-only Opportunity data, so this webhook is optional.
+The backend reloads the current task and CRM context through GET-only HighLevel APIs. A completed task is safely ignored and identical reminder deliveries are deduplicated.
 
-## 4. Optional appointment preparation reminder
+## 4. Appointment preparation reminder
 
-Create a workflow that runs before the appointment (for example 1 hour before) and POST to:
+Create a separate WallPanels workflow:
+
+1. Trigger: **Appointment Status**.
+2. Filters: appointment status **New** or **Confirmed** and the relevant WallPanels calendar(s).
+3. Add **Wait** → **An upcoming appointment or booking** → **Appointment / Calendar Event** → **Before** → **1 hour**. If the appointment time has already passed, select **Exit contact from this workflow**.
+4. Add the standard **Webhook** action (POST) with this URL:
 
 ```
 https://YOUR_RAILWAY_DOMAIN/webhooks/highlevel/appointment-reminder?secret=YOUR_GHL_WEBHOOK_SHARED_SECRET&locationId={{location.id}}&contactId={{contact.id}}
 ```
 
-HighLevel should continue sending any client-facing appointment SMS itself. This endpoint is for the internal Sales briefing only.
+The standard Webhook action supplies the trigger's appointment/calendar object. The backend verifies its current status and reloads the appointment, calendar, contact, opportunity, messages, and relationship context with GET-only HighLevel APIs. HighLevel should continue sending any client-facing appointment SMS itself; this endpoint is for the internal sales briefing only.
 
 ## Safety
 

@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config.js';
-import type { BrandKey, GhlMessage, GhlOpportunity } from '../types.js';
+import type { BrandKey, GhlAppointment, GhlMessage, GhlOpportunity, GhlTask } from '../types.js';
 
 export class GhlClient {
   private readonly pipelineCache = new Map<BrandKey, {
@@ -117,9 +117,30 @@ export class GhlClient {
     };
   }
 
-  async getTasks(brand: BrandKey, contactId: string): Promise<any[]> {
+  async getTasks(brand: BrandKey, contactId: string): Promise<GhlTask[]> {
     const data = await this.getJson(brand, `/contacts/${safeGhlId(contactId, 'contactId')}/tasks`);
     return Array.isArray(data?.tasks) ? data.tasks : [];
+  }
+
+  async getTask(brand: BrandKey, contactId: string, taskId: string): Promise<GhlTask | null> {
+    const data = await this.getJson(
+      brand,
+      `/contacts/${safeGhlId(contactId, 'contactId')}/tasks/${safeGhlId(taskId, 'taskId')}`
+    );
+    return (data?.task ?? data ?? null) as GhlTask | null;
+  }
+
+  async getAppointment(brand: BrandKey, appointmentId: string): Promise<GhlAppointment | null> {
+    const data = await this.getJson(
+      brand,
+      `/calendars/events/appointments/${safeGhlId(appointmentId, 'appointmentId')}`
+    );
+    return (data?.event ?? data ?? null) as GhlAppointment | null;
+  }
+
+  async getCalendar(brand: BrandKey, calendarId: string): Promise<any | null> {
+    const data = await this.getJson(brand, `/calendars/${safeGhlId(calendarId, 'calendarId')}`);
+    return data?.calendar ?? data ?? null;
   }
 
   async getTranscription(brand: BrandKey, locationId: string, messageId: string): Promise<any> {

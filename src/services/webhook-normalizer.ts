@@ -9,8 +9,15 @@ export type NormalizedWebhook = {
   messageId?: string;
   assignedUserId?: string;
   taskTitle?: string;
+  taskBody?: string;
+  taskId?: string;
   dueDate?: string;
   appointmentStart?: string;
+  appointmentId?: string;
+  appointmentTitle?: string;
+  appointmentStatus?: string;
+  calendarId?: string;
+  calendarName?: string;
   transcript?: string;
   voiceAiCallId?: string;
   callType?: 'normal_call' | 'voice_ai';
@@ -33,8 +40,17 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
   const assignedUserId = first(raw,
     'assignedTo', 'assignedUserId', 'assigned_user_id', 'user.id', 'opportunity.assignedTo', 'conversation.assignedTo', 'contact.assignedTo');
   const taskTitle = first(raw, 'task.title', 'taskTitle', 'task_name', 'title');
+  const taskBody = first(raw, 'task.body', 'taskBody', 'task_body');
+  const taskId = first(raw, 'task.id', 'taskId', 'task_id');
   const dueDate = first(raw, 'task.dueDate', 'dueDate', 'task_due_date');
-  const appointmentStart = first(raw, 'appointment.startTime', 'appointment.start_time', 'startTime', 'appointmentStart');
+  const appointmentStart = first(raw, 'calendar.startTime', 'appointment.startTime', 'appointment.start_time', 'startTime', 'appointmentStart');
+  const appointmentId = first(raw, 'calendar.appointmentId', 'appointment.id', 'appointment.appointmentId', 'appointmentId', 'appointment_id');
+  const appointmentTitle = first(raw, 'calendar.title', 'appointment.title', 'appointmentTitle');
+  const appointmentStatus = first(raw,
+    'calendar.status', 'calendar.appointmentStatus', 'calendar.appoinmentStatus',
+    'appointment.status', 'appointment.appointmentStatus', 'appointmentStatus');
+  const calendarId = first(raw, 'calendar.id', 'calendar.calendarId', 'appointment.calendarId', 'calendarId', 'calendar_id');
+  const calendarName = first(raw, 'calendar.calendarName', 'appointment.calendarName', 'calendarName');
   const transcript = first(raw, 'fullTranscript', 'full_transcript', 'transcript', 'call.transcript', 'transcription');
   const eventType = first(raw, 'type', 'eventType', 'event_type', 'callType', 'call_type');
   const explicitVoiceAiCallId = first(raw, 'voiceAiCallId', 'voice_ai_call_id', 'callId', 'call_id', 'call.id');
@@ -43,10 +59,17 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
     .join('|');
   const isVoiceAi = /voice[\s_-]*ai/i.test(String(voiceAiMarker)) || Boolean(first(raw, 'agentId', 'agent_id'));
   const voiceAiCallId = explicitVoiceAiCallId ?? (isVoiceAi ? first(raw, 'id') : undefined);
-  const webhookId = first(raw, 'webhookId', 'webhook_id', 'eventId', 'event_id', 'id');
+  const explicitWebhookId = first(raw, 'webhookId', 'webhook_id', 'eventId', 'event_id');
+  const legacyWebhookId = kind === 'task_reminder' || kind === 'appointment_reminder' ? undefined : first(raw, 'id');
+  const webhookId = explicitWebhookId ?? legacyWebhookId;
   const timestamp = first(raw, 'timestamp', 'createdAt', 'dateAdded', 'eventTime');
 
-  const basis = webhookId || [kind, locationId, contactId, messageId, conversationId, timestamp, stableStringify(raw)].join('|');
+  const reminderBasis = kind === 'task_reminder'
+    ? ['task', locationId, contactId, taskId, dueDate, taskTitle, taskBody].join('|')
+    : kind === 'appointment_reminder'
+      ? ['appointment', locationId, contactId, appointmentId, appointmentStart].join('|')
+      : undefined;
+  const basis = webhookId || reminderBasis || [kind, locationId, contactId, messageId, conversationId, timestamp, stableStringify(raw)].join('|');
   const eventKey = `${kind}:${sha256(String(basis)).slice(0, 48)}`;
 
   return {
@@ -57,8 +80,15 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
     messageId: str(messageId),
     assignedUserId: str(assignedUserId),
     taskTitle: str(taskTitle),
+    taskBody: str(taskBody),
+    taskId: str(taskId),
     dueDate: str(dueDate),
     appointmentStart: str(appointmentStart),
+    appointmentId: str(appointmentId),
+    appointmentTitle: str(appointmentTitle),
+    appointmentStatus: str(appointmentStatus),
+    calendarId: str(calendarId),
+    calendarName: str(calendarName),
     transcript: str(transcript),
     voiceAiCallId: str(voiceAiCallId),
     callType: isVoiceAi ? 'voice_ai' : kind === 'transcript_generated' || kind === 'poll_call' ? 'normal_call' : undefined,
@@ -78,8 +108,11 @@ export function canonicalWebhookPayload(event: NormalizedWebhook): Record<string
     conversationId: event.conversationId,
     messageId: event.messageId,
     assignedUserId: event.assignedUserId,
+    taskId: event.taskId,
     dueDate: event.dueDate,
+    appointmentId: event.appointmentId,
     appointmentStart: event.appointmentStart,
+    calendarId: event.calendarId,
     voiceAiCallId: event.voiceAiCallId,
     callType: event.callType,
     eventTimestamp: event.eventTimestamp,

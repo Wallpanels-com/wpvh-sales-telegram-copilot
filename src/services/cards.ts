@@ -85,17 +85,26 @@ export function buildTaskReminderCard(config: AppConfig, ghl: GhlClient, input: 
   contactId: string;
   contactName: string;
   taskTitle: string;
+  taskBody?: string;
   dueDate?: string;
+  overdue?: boolean;
+  context?: string;
+  pipeline?: string;
   stage?: string;
   assignedName?: string;
 }) {
+  const stage = [input.pipeline, input.stage].filter(Boolean).join(' · ');
   const text = [
-    `📌 <b>Task reminder · ${escapeHtml(input.brandLabel)}</b>`,
-    `\n👤 <b>${escapeHtml(input.contactName)}</b>`,
-    input.assignedName ? `\n👤 Assigned: ${escapeHtml(input.assignedName)}` : '',
-    input.stage ? `\n📍 ${escapeHtml(input.stage)}` : '',
-    `\n\n<b>${escapeHtml(input.taskTitle)}</b>`,
-    input.dueDate ? `\n🕒 ${escapeHtml(formatEt(input.dueDate, config.TIMEZONE))}` : ''
+    `${input.overdue ? '⚠️' : '📞'} <b>${input.overdue ? 'TASK OVERDUE' : 'TASK DUE'}</b>`,
+    `\n<b>${escapeHtml(input.contactName)} — ${escapeHtml(input.brandLabel)}</b>`,
+    stage ? `\nStage: ${escapeHtml(stage)}` : '',
+    input.assignedName ? `\nAssigned Sales: ${escapeHtml(input.assignedName)}` : '',
+    `\n\n<b>Task:</b>\n${escapeHtml(clip(input.taskTitle, 350))}`,
+    input.taskBody && input.taskBody.trim() !== input.taskTitle.trim()
+      ? `\n${escapeHtml(clip(input.taskBody, 500))}`
+      : '',
+    input.dueDate ? `\n\n<b>Due:</b>\n${escapeHtml(formatEt(input.dueDate, config.TIMEZONE))}` : '',
+    input.context ? `\n\n<b>Context:</b>\n${escapeHtml(clip(input.context, 700))}` : ''
   ].join('');
   return {
     text,
@@ -109,20 +118,36 @@ export function buildAppointmentCard(config: AppConfig, ghl: GhlClient, input: {
   contactId: string;
   contactName: string;
   startTime?: string;
-  context?: string;
+  appointmentTitle?: string;
+  calendarName?: string;
+  pipeline?: string;
+  stage?: string;
+  briefItems?: string[];
   assignedName?: string;
 }) {
+  const stage = [input.pipeline, input.stage].filter(Boolean).join(' · ');
   const text = [
-    `📅 <b>Upcoming meeting · ${escapeHtml(input.brandLabel)}</b>`,
-    `\n👤 <b>${escapeHtml(input.contactName)}</b>`,
-    input.assignedName ? `\n👤 Assigned: ${escapeHtml(input.assignedName)}` : '',
+    `📅 <b>${meetingHeading(input.startTime)}</b>`,
+    `\n<b>${escapeHtml(input.contactName)} — ${escapeHtml(input.brandLabel)}</b>`,
     input.startTime ? `\n🕒 ${escapeHtml(formatEt(input.startTime, config.TIMEZONE))}` : '',
-    input.context ? `\n\n🧠 <b>Brief</b>\n${escapeHtml(clip(input.context, 900))}` : ''
+    input.appointmentTitle ? `\nMeeting: ${escapeHtml(clip(input.appointmentTitle, 250))}` : '',
+    input.calendarName ? `\nCalendar: ${escapeHtml(clip(input.calendarName, 200))}` : '',
+    stage ? `\nStage: ${escapeHtml(stage)}` : '',
+    input.assignedName ? `\nAssigned Sales: ${escapeHtml(input.assignedName)}` : '',
+    input.briefItems?.length ? `\n\n<b>Before the meeting:</b>\n${bullets(input.briefItems.slice(0, 6))}` : ''
   ].join('');
   return {
     text,
     keyboard: [[{ text: '↗️ Open in GHL', url: ghl.contactUrl(input.locationId, input.contactId) }]] as InlineButton[][]
   };
+}
+
+function meetingHeading(startTime?: string): string {
+  if (!startTime) return 'UPCOMING MEETING';
+  const minutes = (Date.parse(startTime) - Date.now()) / 60_000;
+  return Number.isFinite(minutes) && minutes >= 30 && minutes <= 90
+    ? 'MEETING IN 1 HOUR'
+    : 'UPCOMING MEETING';
 }
 
 function bullets(items: string[]) {

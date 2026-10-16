@@ -49,6 +49,31 @@ export type GhlOpportunity = {
   calendarEvents?: Array<Record<string, unknown>>;
 };
 
+export type GhlTask = {
+  id: string;
+  title?: string;
+  body?: string;
+  assignedTo?: string;
+  dueDate?: string;
+  completed?: boolean;
+  contactId?: string;
+  status?: string;
+};
+
+export type GhlAppointment = {
+  id?: string;
+  appointmentId?: string;
+  calendarId?: string;
+  locationId?: string;
+  contactId?: string;
+  title?: string;
+  startTime?: string;
+  endTime?: string;
+  status?: string;
+  appointmentStatus?: string;
+  assignedUserId?: string;
+};
+
 export type ClientContext = {
   brand: BrandKey;
   brandLabel: string;

@@ -129,6 +129,17 @@ export function createDb(config: AppConfig) {
       return rows[0] ?? null;
     },
 
+    async getLatestCallContext(locationId: string, contactId: string) {
+      const rows = await sql`
+        SELECT summary, client_needs, objections, commitments, next_steps, important_facts, created_at
+        FROM call_summaries
+        WHERE location_id=${locationId} AND contact_id=${contactId}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      return rows[0] ?? null;
+    },
+
     async upsertClientMemory(locationId: string, contactId: string, relationshipSummary: string, lastCallSummary?: string) {
       await sql`
         INSERT INTO client_memory (location_id, contact_id, relationship_summary, last_call_summary)

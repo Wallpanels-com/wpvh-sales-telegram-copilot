@@ -35,7 +35,10 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
       const payload = mergeQueryIntoPayload(request.body, query);
       delete payload.secret;
       const n = normalizeWebhook(route.kind, payload);
-      const identifiers = [n.locationId, n.contactId, n.conversationId, n.messageId, n.assignedUserId, n.voiceAiCallId]
+      const identifiers = [
+        n.locationId, n.contactId, n.conversationId, n.messageId, n.assignedUserId,
+        n.voiceAiCallId, n.taskId, n.appointmentId, n.calendarId
+      ]
         .filter((value): value is string => Boolean(value));
       if (!n.locationId || !n.contactId
         || identifiers.some((value) => !isSafeExternalId(value))
