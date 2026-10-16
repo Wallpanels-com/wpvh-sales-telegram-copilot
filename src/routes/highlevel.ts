@@ -4,7 +4,7 @@ import type { Db } from '../db.js';
 import type { WebhookKind } from '../types.js';
 import { shouldProcessShadowLocation } from '../services/delivery-policy.js';
 import { canonicalWebhookPayload, isPlainObject, mergeQueryIntoPayload, normalizeWebhook } from '../services/webhook-normalizer.js';
-import { auditRef, FixedWindowRateLimiter, isSafeExternalId, timingSafeSecretEqual } from '../security.js';
+import { auditRef, FixedWindowRateLimiter, isSafeExternalId, isSafeWebhookEventId, timingSafeSecretEqual } from '../security.js';
 
 export async function registerHighLevelRoutes(app: FastifyInstance, config: AppConfig, db: Db) {
   const rateLimiter = new FixedWindowRateLimiter(config.WEBHOOK_RATE_LIMIT_PER_MINUTE ?? 300);
@@ -35,9 +35,11 @@ export async function registerHighLevelRoutes(app: FastifyInstance, config: AppC
       const payload = mergeQueryIntoPayload(request.body, query);
       delete payload.secret;
       const n = normalizeWebhook(route.kind, payload);
-      const identifiers = [n.locationId, n.contactId, n.conversationId, n.messageId, n.assignedUserId, n.voiceAiCallId, n.sourceEventId]
+      const identifiers = [n.locationId, n.contactId, n.conversationId, n.messageId, n.assignedUserId, n.voiceAiCallId]
         .filter((value): value is string => Boolean(value));
-      if (!n.locationId || !n.contactId || identifiers.some((value) => !isSafeExternalId(value))) {
+      if (!n.locationId || !n.contactId
+        || identifiers.some((value) => !isSafeExternalId(value))
+        || (n.sourceEventId !== undefined && !isSafeWebhookEventId(n.sourceEventId))) {
         return reply.code(400).send({ ok: false, error: 'invalid_request' });
       }
       if (n.locationId !== config.GHL_WP_LOCATION_ID && n.locationId !== config.GHL_VH_LOCATION_ID) {

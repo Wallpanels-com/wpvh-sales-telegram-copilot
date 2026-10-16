@@ -78,6 +78,28 @@ describe('HighLevel webhook security', () => {
     await app.close();
   });
 
+  it('accepts HighLevel timestamp punctuation in an opaque event ID without weakening resource ID validation', async () => {
+    const app = Fastify();
+    let saved: any;
+    await registerHighLevelRoutes(app, config(), {
+      enqueueEvent: async (event: any) => { saved = event; return true; }
+    } as any);
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret&locationId=wp-location&contactId=contact-1&eventId=contact-1-202610160113002.'
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(saved.payload.eventId).toBe('contact-1-202610160113002.');
+
+    const unsafeResourceId = await app.inject({
+      method: 'POST',
+      url: '/webhooks/highlevel/customer-replied?secret=a-strong-shared-secret&locationId=wp-location&contactId=contact.1&eventId=event-1'
+    });
+    expect(unsafeResourceId.statusCode).toBe(400);
+    await app.close();
+  });
+
   it('safely rejects malformed JSON and oversized payloads', async () => {
     const app = Fastify();
     await registerHighLevelRoutes(app, config(), { enqueueEvent: async () => true } as any);

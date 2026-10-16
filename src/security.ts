@@ -48,6 +48,16 @@ export function isSafeExternalId(value: string | undefined, maxLength = 160): bo
   return Boolean(value && value.length <= maxLength && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(value));
 }
 
+/**
+ * Webhook event IDs are opaque idempotency keys, not resource identifiers used
+ * in an outbound URL. HighLevel workflow templates can legitimately append
+ * timestamp punctuation, so allow the small URL-safe punctuation set below.
+ * The value is still length-bounded and hashed before it becomes event_key.
+ */
+export function isSafeWebhookEventId(value: string | undefined, maxLength = 256): boolean {
+  return Boolean(value && value.length <= maxLength && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(value));
+}
+
 export class FixedWindowRateLimiter {
   private readonly buckets = new Map<string, { count: number; resetAt: number }>();
 
