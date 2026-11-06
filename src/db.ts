@@ -24,7 +24,8 @@ export function createDb(config: AppConfig) {
       `;
       await sql`
         UPDATE deferred_notifications
-        SET status='pending', processing_started_at=NULL
+        SET status='uncertain', processing_started_at=NULL,
+            last_error='Interrupted delivery requires review'
         WHERE status='processing' AND processing_started_at < now() - interval '15 minutes'
       `;
     },
@@ -94,6 +95,14 @@ export function createDb(config: AppConfig) {
         SET status='done', processed_at=now(), processing_started_at=NULL, last_error=NULL,
             payload='{"redacted":true}'::jsonb
         WHERE id=${id}
+      `;
+    },
+
+    async holdEventsBefore(cutoff: string) {
+      await sql`
+        UPDATE webhook_events SET status='held',processing_started_at=NULL,
+          last_error='Held for review during delivery repair; not replayed automatically'
+        WHERE status IN ('pending','processing','retry') AND created_at < ${cutoff}::timestamptz
       `;
     },
 
@@ -249,7 +258,7 @@ export function createDb(config: AppConfig) {
       await sql`
         INSERT INTO deferred_notifications (card_id, telegram_user_id, deliver_after)
         VALUES (${cardId}, ${telegramUserId}, ${deliverAfterIso})
-        ON CONFLICT (card_id, telegram_user_id) DO UPDATE SET deliver_after=EXCLUDED.deliver_after
+        ON CONFLICT (card_id, telegram_user_id) DO NOTHING
       `;
     },
 
@@ -259,7 +268,7 @@ export function createDb(config: AppConfig) {
         const allowedJson = JSON.stringify(allowedTelegramUserIds);
         return await sql`
           UPDATE deferred_notifications d
-          SET status='processing', processing_started_at=now()
+          SET status='processing', processing_started_at=now(), attempts=attempts+1
           WHERE d.id IN (
             SELECT id FROM deferred_notifications
             WHERE status='pending' AND deliver_after <= now()
@@ -273,7 +282,7 @@ export function createDb(config: AppConfig) {
       }
       return await sql`
         UPDATE deferred_notifications d
-        SET status='processing', processing_started_at=now()
+        SET status='processing', processing_started_at=now(), attempts=attempts+1
         WHERE d.id IN (
           SELECT id FROM deferred_notifications
           WHERE status='pending' AND deliver_after <= now()
@@ -289,8 +298,49 @@ export function createDb(config: AppConfig) {
       await sql`UPDATE deferred_notifications SET status='done', delivered_at=now(), processing_started_at=NULL WHERE id=${id}`;
     },
 
-    async markDeferredPending(id: string) {
-      await sql`UPDATE deferred_notifications SET status='pending', processing_started_at=NULL WHERE id=${id}`;
+    async hasDelivery(cardId: string, telegramUserId: string): Promise<boolean> {
+      const rows = await sql`SELECT 1 FROM telegram_deliveries WHERE card_id=${cardId} AND telegram_user_id=${telegramUserId} LIMIT 1`;
+      return rows.length > 0;
+    },
+
+    async holdDeferredBefore(cutoff: string) {
+      await sql`
+        UPDATE deferred_notifications
+        SET status='held', processing_started_at=NULL,
+            last_error='Held for review during delivery repair; not replayed automatically'
+        WHERE status IN ('pending','processing') AND created_at < ${cutoff}::timestamptz
+      `;
+    },
+
+    async recoverStuckDeferred() {
+      await sql`
+        UPDATE deferred_notifications SET status='uncertain', processing_started_at=NULL,
+          last_error='Interrupted delivery requires review'
+        WHERE status='processing' AND processing_started_at < now() - interval '15 minutes'
+      `;
+    },
+
+    async finishDeferred(id: string, status: 'failed' | 'uncertain' | 'superseded', reason: string) {
+      await sql`UPDATE deferred_notifications SET status=${status},last_error=${reason.slice(0, 500)},processing_started_at=NULL WHERE id=${id}`;
+    },
+
+    async retryDeferred(id: string, attempts: number, reason: string, retryAfterSeconds = 0) {
+      const delay = Math.min(3600, Math.max(30 * 2 ** Math.max(0, attempts - 1), retryAfterSeconds));
+      const next = new Date(Date.now() + delay * 1000).toISOString();
+      await sql`
+        UPDATE deferred_notifications SET status=${attempts >= 7 ? 'failed' : 'pending'},
+          deliver_after=${next}::timestamptz,last_error=${reason.slice(0, 500)},processing_started_at=NULL
+        WHERE id=${id}
+      `;
+    },
+
+    async recordDeliveryIssue(cardId: string, telegramUserId: string, status: 'pending' | 'failed' | 'uncertain', reason: string, retryAfterSeconds = 30) {
+      const next = new Date(Date.now() + Math.min(3600, Math.max(30, retryAfterSeconds)) * 1000).toISOString();
+      await sql`
+        INSERT INTO deferred_notifications(card_id,telegram_user_id,deliver_after,status,attempts,last_error)
+        VALUES(${cardId},${telegramUserId},${next}::timestamptz,${status},1,${reason.slice(0, 500)})
+        ON CONFLICT(card_id,telegram_user_id) DO NOTHING
+      `;
     },
 
     async getCheckpoint(key: string): Promise<string | null> {

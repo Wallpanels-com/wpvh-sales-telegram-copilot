@@ -4,6 +4,7 @@ import type { Db } from '../db.js';
 import type { BrandKey, GhlOpportunity, SalesUser } from '../types.js';
 import { escapeHtml, clip } from '../utils/html.js';
 import { GhlClient } from './ghl.js';
+import { shouldProcessAssignedSales, shouldProcessShadowLocation } from './delivery-policy.js';
 
 export type BriefItem = {
   brand: BrandKey;
@@ -24,7 +25,8 @@ export class BriefingService {
     const items: BriefItem[] = [];
     for (const brand of ['wp', 'vh'] as BrandKey[]) {
       const ghlUserId = brand === 'wp' ? user.wpGhlUserId : user.vhGhlUserId;
-      if (!ghlUserId) continue;
+      if (!ghlUserId || !shouldProcessShadowLocation(this.config, this.ghl.locationId(brand))
+        || !shouldProcessAssignedSales(this.config, ghlUserId)) continue;
       const opportunities = await this.loadAssignedOpportunities(brand, ghlUserId);
       for (const opp of opportunities) items.push(...await this.extractItems(brand, opp));
     }
@@ -65,7 +67,10 @@ export class BriefingService {
   }
 
   async allSales(): Promise<SalesUser[]> {
-    return (await this.db.listSalesUsers()).filter((u) => !u.isAdmin && (u.wpGhlUserId || u.vhGhlUserId));
+    return (await this.db.listSalesUsers()).filter((u) => !u.isAdmin && (
+      (u.wpGhlUserId && shouldProcessShadowLocation(this.config, this.ghl.locationId('wp')) && shouldProcessAssignedSales(this.config, u.wpGhlUserId))
+      || (u.vhGhlUserId && shouldProcessShadowLocation(this.config, this.ghl.locationId('vh')) && shouldProcessAssignedSales(this.config, u.vhGhlUserId))
+    ));
   }
 
   private async loadAssignedOpportunities(brand: BrandKey, ghlUserId: string): Promise<GhlOpportunity[]> {

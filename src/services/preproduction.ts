@@ -3,6 +3,7 @@ import type { Db } from '../db.js';
 import { auditRef, safeErrorMessage } from '../security.js';
 import { GhlClient } from './ghl.js';
 import { TelegramClient } from './telegram.js';
+import { canDeliverToTelegram } from './delivery-policy.js';
 
 export async function runPreProductionChecks(
   config: AppConfig,
@@ -21,7 +22,7 @@ export async function runPreProductionChecks(
     settle(() => ghl.getWorkflows('wp'))
   ]);
 
-  const recipients = salesUsers.filter((user) => (
+  const recipients = salesUsers.filter((user) => canDeliverToTelegram(config, user.telegramUserId) && (
     config.adminTelegramUserIds.includes(user.telegramUserId)
     || Boolean(user.wpGhlUserId && trackedSalesIds.has(user.wpGhlUserId))
   ));

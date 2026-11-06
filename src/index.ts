@@ -93,6 +93,10 @@ app.get('/', async () => ({
 }));
 
 app.addHook('onReady', async () => {
+  if (config.DEFERRED_DELIVERY_RESUME_AT) {
+    await db.holdDeferredBefore(config.DEFERRED_DELIVERY_RESUME_AT);
+    await db.holdEventsBefore(config.DEFERRED_DELIVERY_RESUME_AT);
+  }
   await db.recoverStuckWork();
   await runPreProductionChecks(config, db, ghl, telegram, app.log);
   if (config.AI_VALIDATE_ON_STARTUP) {
@@ -114,8 +118,13 @@ app.addHook('onReady', async () => {
 });
 
 app.addHook('onClose', async () => {
+  scheduler.stop();
   poller.stop();
   processor.stop();
 });
 
 await app.listen({ port: config.PORT, host: '0.0.0.0' });
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => { void app.close(); });
+}

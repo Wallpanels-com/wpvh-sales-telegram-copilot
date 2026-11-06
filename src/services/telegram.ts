@@ -14,6 +14,34 @@ export type InlineButton =
   | { text: string; url: string }
   | { text: string; copy_text: { text: string } };
 
+export class TelegramApiError extends Error {
+  constructor(readonly status: number, readonly reason: string, readonly retryAfterSeconds = 0) {
+    super(`Telegram request rejected: ${status} (${reason})`);
+    this.name = 'TelegramApiError';
+  }
+}
+
+export function deliveryFailurePolicy(error: unknown): { status: 'pending' | 'failed' | 'uncertain'; retryAfterSeconds: number } {
+  if (error instanceof TelegramApiError) {
+    return {
+      status: error.status === 429 || error.status >= 500 ? 'pending' : 'failed',
+      retryAfterSeconds: error.retryAfterSeconds
+    };
+  }
+  // A transport failure does not prove Telegram rejected the message.
+  return { status: 'uncertain', retryAfterSeconds: 0 };
+}
+
+function safeTelegramReason(description: unknown): string {
+  const value = String(description ?? '').toLowerCase();
+  if (value.includes('too long')) return 'message_too_long';
+  if (value.includes('parse entities')) return 'invalid_html';
+  if (value.includes('button') || value.includes('keyboard')) return 'invalid_button';
+  if (value.includes('blocked')) return 'bot_blocked';
+  if (value.includes('chat not found')) return 'chat_unavailable';
+  return 'api_rejected';
+}
+
 export class TelegramClient {
   private readonly baseUrl: string;
 
@@ -101,7 +129,9 @@ export class TelegramClient {
     if (text.length > 1024 * 1024) throw new Error('Telegram response exceeded size limit');
     const data = text ? JSON.parse(text) : null;
     if (!res.ok || !data?.ok) {
-      throw new Error(`Telegram ${method} failed: ${res.status}`);
+      const retryAfter = Number(data?.parameters?.retry_after ?? 0);
+      throw new TelegramApiError(Number(data?.error_code ?? res.status), safeTelegramReason(data?.description),
+        Number.isFinite(retryAfter) ? Math.max(0, Math.min(3600, retryAfter)) : 0);
     }
     return data.result;
   }

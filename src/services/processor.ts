@@ -16,12 +16,13 @@ import {
 } from './delivery-policy.js';
 import { GhlClient } from './ghl.js';
 import { resolveRecipients } from './recipients.js';
-import { TelegramClient } from './telegram.js';
+import { deliveryFailurePolicy, TelegramClient } from './telegram.js';
 import { normalizeWebhook } from './webhook-normalizer.js';
 import { auditRef, safeErrorMessage } from '../security.js';
 
 export class EventProcessor {
   private running = false;
+  private deferredRunning = false;
 
   constructor(
     private readonly config: AppConfig,
@@ -44,14 +45,22 @@ export class EventProcessor {
   }
 
   private async loop() {
+    let idleDelay = 1200;
     while (this.running) {
       try {
         const event = await this.db.claimNextEvent();
         if (!event) {
-          await sleep(1200);
+          await sleep(idleDelay);
+          idleDelay = Math.min(5000, idleDelay * 1.5);
           continue;
         }
+        idleDelay = 1200;
         try {
+          if (this.config.DEFERRED_DELIVERY_RESUME_AT
+            && new Date(event.created_at).getTime() < Date.parse(this.config.DEFERRED_DELIVERY_RESUME_AT)) {
+            await this.db.holdEventsBefore(this.config.DEFERRED_DELIVERY_RESUME_AT);
+            continue;
+          }
           if (!isEventAfterShadowStart(this.config, event.created_at as Date | string | undefined)) {
             await this.db.markEventDiscarded(String(event.id), 'Discarded: event predates shadow test start');
             this.logger.info({ eventId: event.id, kind: event.kind, createdAt: event.created_at }, 'event discarded before shadow start');
@@ -403,39 +412,84 @@ export class EventProcessor {
   }
 
   async deliverDeferredNow() {
-    if (this.config.TELEGRAM_DELIVERY_MODE === 'disabled') return;
-    const allowed = this.config.TELEGRAM_DELIVERY_MODE === 'allowlist'
-      ? [...this.config.telegramAllowedUserIds]
-      : undefined;
-    const due = await this.db.claimDueDeferred(50, allowed);
-    for (const item of due) {
-      try {
-        const card = await this.db.getCard(String(item.card_id));
-        if (!card) {
+    if (this.deferredRunning || this.config.TELEGRAM_DELIVERY_MODE === 'disabled') return;
+    if (!isShadowTestActive(this.config) && !isWithinWorkHours(this.config)) return;
+    this.deferredRunning = true;
+    try {
+      await this.db.recoverStuckDeferred();
+      const allowed = this.config.SHADOW_TEST_ENABLED
+        ? [this.config.SHADOW_TEST_RECIPIENT_TELEGRAM_ID]
+        : this.config.TELEGRAM_DELIVERY_MODE === 'allowlist' ? [...this.config.telegramAllowedUserIds] : undefined;
+      // Claim one at a time: a slow CRM request must not strand a batch of leased rows.
+      const contexts = new Map<string, ClientContext>();
+      for (let processed = 0; processed < 10; processed += 1) {
+        const item = (await this.db.claimDueDeferred(1, allowed))[0];
+        if (!item) break;
+        let sending = false;
+        try {
+          const card = await this.db.getCard(String(item.card_id));
+          const recipient = String(item.telegram_user_id);
+          if (!card || await this.db.hasDelivery(String(item.card_id), recipient)) {
+            await this.db.markDeferredDone(String(item.id));
+            continue;
+          }
+          if (!canDeliverToTelegram(this.config, recipient)
+            || !shouldProcessShadowLocation(this.config, String(card.location_id))) {
+            await this.db.finishDeferred(String(item.id), 'superseded', 'Recipient/location outside current delivery scope');
+            continue;
+          }
+          const appointmentStart = card.kind === 'appointment' ? Date.parse(String(card.payload?.startTime ?? '')) : NaN;
+          if (Number.isFinite(appointmentStart) && appointmentStart <= Date.now()) {
+            await this.db.finishDeferred(String(item.id), 'superseded', 'Appointment already started');
+            continue;
+          }
+          let context = contexts.get(String(card.id));
+          if (!context || !this.config.adminTelegramUserIds.includes(recipient)) {
+            context = await this.contextService.build({
+              brand: String(card.brand) as BrandKey, contactId: String(card.contact_id),
+              conversationId: card.conversation_id ? String(card.conversation_id) : undefined,
+              messageId: card.message_id ? String(card.message_id) : undefined
+            });
+            contexts.set(String(card.id), context);
+          }
+          const { recipients } = await resolveRecipients(this.config, this.db, context.brand, context.assignedGhlUserId);
+          if (!shouldProcessAssignedSales(this.config, context.assignedGhlUserId) || !recipients.includes(recipient)) {
+            await this.db.finishDeferred(String(item.id), 'superseded', 'Current CRM owner no longer permits this recipient');
+            continue;
+          }
+          const latestInbound = [...context.recentMessages].reverse().find((m) => m.direction === 'inbound');
+          if (card.kind === 'reply' && latestInbound && latestInbound.id !== card.message_id) {
+            await this.db.finishDeferred(String(item.id), 'superseded', 'A newer client message replaced this draft');
+            continue;
+          }
+          const rendered = await this.renderStoredCard(card, context);
+          sending = true;
+          const result = await this.telegram.sendMessage({ chatId: recipient, ...rendered });
+          await this.db.recordDelivery(String(card.id), recipient, result.message_id, 'deferred');
           await this.db.markDeferredDone(String(item.id));
-          continue;
+          this.logger.info({ cardId: card.id, recipientRef: auditRef(recipient), deferredId: item.id }, 'Telegram delivered');
+        } catch (error) {
+          const reason = safeErrorMessage(error);
+          const policy = deliveryFailurePolicy(error);
+          if (sending && policy.status !== 'pending') {
+            await this.db.finishDeferred(String(item.id), policy.status, reason);
+          } else if (!sending && [400, 403, 404].includes(Number((error as any)?.status))) {
+            await this.db.finishDeferred(String(item.id), 'failed', reason);
+          } else {
+            await this.db.retryDeferred(String(item.id), Number(item.attempts), reason, policy.retryAfterSeconds);
+          }
+          this.logger.error({ deferredId: item.id, error: reason }, 'deferred delivery failed');
         }
-        const rendered = await this.renderStoredCard(card);
-        const result = await this.telegram.sendMessage({ chatId: String(item.telegram_user_id), ...rendered });
-        await this.db.recordDelivery(String(card.id), String(item.telegram_user_id), result.message_id, 'deferred');
-        await this.db.markDeferredDone(String(item.id));
-        this.logger.info({ cardId: card.id, recipientRef: auditRef(String(item.telegram_user_id)), deferredId: item.id }, 'Telegram delivered');
-      } catch (error) {
-        this.logger.error({ deferredId: item.id, error: safeErrorMessage(error) }, 'deferred delivery failed');
-        await this.db.markDeferredPending(String(item.id));
       }
+    } finally {
+      this.deferredRunning = false;
     }
   }
 
-  private async renderStoredCard(card: any) {
+  private async renderStoredCard(card: any, currentContext: ClientContext) {
     const brand = String(card.brand) as BrandKey;
     if (card.kind === 'reply') {
-      const context = await this.contextService.build({
-        brand,
-        contactId: String(card.contact_id),
-        conversationId: card.conversation_id ? String(card.conversation_id) : undefined,
-        messageId: card.message_id ? String(card.message_id) : undefined
-      });
+      const context = currentContext;
       const ai = {
         summaryRu: String(card.context_summary ?? ''),
         whyRu: String(card.payload?.whyRu ?? ''),
@@ -445,14 +499,14 @@ export class EventProcessor {
         shouldReply: Boolean(card.should_reply),
         contextTokensEstimate: Number(card.payload?.contextTokensEstimate ?? 0)
       };
-      const { assignedSales } = await resolveRecipients(this.config, this.db, brand, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined);
+      const { assignedSales } = await resolveRecipients(this.config, this.db, brand, context.assignedGhlUserId);
       const built = buildReplyCard(this.config, this.ghl, context, ai, assignedSales?.name);
       return {
         text: prependShadowTestPrefix(this.config, built.text, assignedSales?.name, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined),
         keyboard: hydrateCardCallbacks(built.keyboard, String(card.id))
       };
     }
-    const { assignedSales } = await resolveRecipients(this.config, this.db, brand, card.assigned_ghl_user_id ? String(card.assigned_ghl_user_id) : undefined);
+    const { assignedSales } = await resolveRecipients(this.config, this.db, brand, currentContext.assignedGhlUserId);
     if (card.kind === 'call') {
       const built = buildCallCard(this.config, this.ghl, {
         brandLabel: this.ghl.brandLabel(brand), locationId: String(card.location_id), contactId: String(card.contact_id),
@@ -499,11 +553,15 @@ export class EventProcessor {
       return;
     }
     for (const chatId of permittedRecipients) {
+      let sent = false;
       try {
         const result = await this.telegram.sendMessage({ chatId, text, keyboard });
+        sent = true;
         await this.db.recordDelivery(cardId, chatId, result.message_id, 'primary');
         this.logger.info({ cardId, recipientRef: auditRef(chatId) }, 'Telegram delivered');
       } catch (error) {
+        const policy = sent ? { status: 'uncertain' as const, retryAfterSeconds: 0 } : deliveryFailurePolicy(error);
+        await this.db.recordDeliveryIssue(cardId, chatId, policy.status, safeErrorMessage(error), policy.retryAfterSeconds);
         this.logger.error({ recipientRef: auditRef(chatId), cardId, error: safeErrorMessage(error) }, 'Telegram delivery failed');
       }
     }

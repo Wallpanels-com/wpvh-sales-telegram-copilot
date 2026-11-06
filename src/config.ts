@@ -25,6 +25,10 @@ const envSchema = z.object({
   TELEGRAM_ALLOWED_USER_IDS: z.string().default(''),
   ADMIN_TELEGRAM_USER_IDS: z.string().default(''),
   SALES_MAPPINGS_JSON: z.string().default('[]'),
+  DEFERRED_DELIVERY_RESUME_AT: z.string().default('').refine(
+    (value) => !value || !Number.isNaN(Date.parse(value)),
+    'DEFERRED_DELIVERY_RESUME_AT must be an ISO date/time or empty'
+  ),
 
   SHADOW_TEST_ENABLED: boolFromEnv.default(false),
   SHADOW_TEST_RECIPIENT_TELEGRAM_ID: z.string().default(''),
