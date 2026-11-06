@@ -2,6 +2,7 @@ import type { AppConfig } from '../config.js';
 import type { Db } from '../db.js';
 import type { BrandKey, ClientContext, GhlMessage, GhlTask, WebhookKind } from '../types.js';
 import { sha256 } from '../utils/hash.js';
+import { isEmojiOnlyMessage } from '../utils/emoji.js';
 import { isWithinWorkHours, nextWorkStart } from '../utils/time.js';
 import { AiRateLimitError, AiService } from './ai.js';
 import { buildAppointmentCard, buildCallCard, buildReplyCard, buildTaskReminderCard, hydrateCardCallbacks } from './cards.js';
@@ -139,6 +140,7 @@ export class EventProcessor {
     }
     if (!contactId) throw new Error('customer reply event has no contactId and could not resolve it');
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(contactId) }, 'contact resolved');
+    if (triggerMessage && await this.skipEmojiOnlyReply(triggerMessage, locationId, n.eventKey)) return;
 
     const context = await this.contextService.build({ brand, contactId, conversationId, messageId: inputMessageId });
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), assignedSalesRef: auditRef(context.assignedGhlUserId) }, 'assigned sales resolved');
@@ -147,6 +149,7 @@ export class EventProcessor {
     const effectiveMessage = triggerMessage ?? context.triggerMessage;
     if (effectiveMessage?.direction && effectiveMessage.direction !== 'inbound') return;
     if (isBeforeDeliveryCutover(this.config, effectiveMessage?.dateAdded)) return;
+    if (effectiveMessage && await this.skipEmojiOnlyReply(effectiveMessage, locationId, n.eventKey)) return;
     const effectiveMessageId = inputMessageId ?? effectiveMessage?.id;
 
     let claimed = false;
@@ -301,6 +304,14 @@ export class EventProcessor {
       if (claimed) await this.db.unmarkMessageProcessed(locationId, processedKey);
       throw error;
     }
+  }
+
+  private async skipEmojiOnlyReply(message: GhlMessage, locationId: string, eventKey: string): Promise<boolean> {
+    if (message.direction && message.direction !== 'inbound') return false;
+    if (!isEmojiOnlyMessage(message)) return false;
+    if (message.id) await this.db.markMessageProcessed(locationId, message.id, message.direction ?? 'inbound', message.messageType);
+    this.logger.info({ eventKey, messageRef: auditRef(message.id) }, 'emoji-only client reply skipped');
+    return true;
   }
 
   private async processTaskReminder(n: ReturnType<typeof normalizeWebhook>) {
@@ -459,6 +470,11 @@ export class EventProcessor {
               messageId: card.message_id ? String(card.message_id) : undefined
             });
             contexts.set(String(card.id), context);
+          }
+          if (card.kind === 'reply' && context.triggerMessage?.id === card.message_id
+            && isEmojiOnlyMessage(context.triggerMessage)) {
+            await this.db.finishDeferred(String(item.id), 'superseded', 'Emoji-only client reply');
+            continue;
           }
           const { recipients } = await resolveRecipients(this.config, this.db, context.brand, context.assignedGhlUserId);
           if (!shouldProcessAssignedSales(this.config, context.assignedGhlUserId) || !recipients.includes(recipient)) {

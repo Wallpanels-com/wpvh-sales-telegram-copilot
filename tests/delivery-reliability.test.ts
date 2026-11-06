@@ -63,6 +63,18 @@ describe('delivery reliability', () => {
     expect(h.db.markDeferredDone).toHaveBeenCalledWith('delivery-1');
   });
 
+  it('suppresses an emoji-only reply that was deferred before the filter existed', async () => {
+    const h = harness();
+    Object.assign(h.card, { kind: 'reply', message_id: 'emoji-message' });
+    h.contextService.build.mockResolvedValue({
+      brand: 'wp', locationId: 'wp-location', assignedGhlUserId: 'mary-ghl', recentMessages: [], openTasks: [],
+      triggerMessage: { id: 'emoji-message', body: '🔥', direction: 'inbound' }
+    } as any);
+    await h.processor.deliverDeferredNow();
+    expect(h.telegram.sendMessage).not.toHaveBeenCalled();
+    expect(h.db.finishDeferred).toHaveBeenCalledWith('delivery-1', 'superseded', 'Emoji-only client reply');
+  });
+
   it('does not deliver a previous owner card after CRM reassignment', async () => {
     const h = harness();
     h.contextService.build.mockResolvedValue({ brand: 'wp', locationId: 'wp-location', assignedGhlUserId: 'jenny-ghl', recentMessages: [], openTasks: [] });

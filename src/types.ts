@@ -17,6 +17,7 @@ export type GhlMessage = {
   conversationId?: string;
   dateAdded?: string;
   body?: string;
+  attachments?: unknown[];
   direction?: 'inbound' | 'outbound' | string;
   messageType?: string;
   source?: string;
