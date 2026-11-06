@@ -6,6 +6,7 @@ import { GhlClient } from './ghl.js';
 import { normalizeWebhook } from './webhook-normalizer.js';
 import { canonicalWebhookPayload } from './webhook-normalizer.js';
 import { safeErrorMessage } from '../security.js';
+import { isBeforeDeliveryCutover } from './delivery-policy.js';
 
 export class GhlPoller {
   private timer: NodeJS.Timeout | null = null;
@@ -53,9 +54,13 @@ export class GhlPoller {
     const key = `messages:${brand}:${channel}`;
     const checkpoint = await this.db.getCheckpoint(key);
     const now = DateTime.utc();
-    const start = checkpoint
+    let start = checkpoint
       ? DateTime.fromISO(checkpoint, { zone: 'utc' }).minus({ minutes: 2 })
       : now.minus({ minutes: this.config.POLLING_LOOKBACK_MINUTES });
+    if (this.config.DEFERRED_DELIVERY_RESUME_AT) {
+      const cutoff = DateTime.fromISO(this.config.DEFERRED_DELIVERY_RESUME_AT, { zone: 'utc' });
+      if (start < cutoff) start = cutoff;
+    }
 
     let cursor: string | undefined;
     for (let page = 0; page < 10; page += 1) {
@@ -79,6 +84,9 @@ export class GhlPoller {
 
   private async enqueueMessage(brand: BrandKey, channel: string, message: GhlMessage) {
     if (!message.id || !message.contactId) return;
+    if (this.config.DEFERRED_DELIVERY_RESUME_AT
+      && (!message.dateAdded || !Number.isFinite(Date.parse(message.dateAdded))
+        || isBeforeDeliveryCutover(this.config, message.dateAdded))) return;
     const locationId = this.ghl.locationId(brand);
     if (channel.toLowerCase() === 'call' || String(message.messageType).toUpperCase().includes('CALL')) {
       const n = normalizeWebhook('poll_call', {

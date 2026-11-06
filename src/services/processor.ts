@@ -8,6 +8,7 @@ import { buildAppointmentCard, buildCallCard, buildReplyCard, buildTaskReminderC
 import { ContextService } from './context.js';
 import {
   canDeliverToTelegram,
+  isBeforeDeliveryCutover,
   isEventAfterShadowStart,
   isShadowTestActive,
   prependShadowTestPrefix,
@@ -85,6 +86,11 @@ export class EventProcessor {
 
   async processEvent(kind: WebhookKind, payload: any, source = 'unknown') {
     const n = normalizeWebhook(kind, payload);
+    if (['customer_replied', 'poll_message', 'transcript_generated', 'poll_call'].includes(kind)
+      && isBeforeDeliveryCutover(this.config, n.eventTimestamp)) {
+      this.logger.info({ kind, eventKey: n.eventKey }, 'event skipped before delivery cutover');
+      return;
+    }
     this.logger.info({ kind, source, locationRef: auditRef(n.locationId), contactRef: auditRef(n.contactId), messageRef: auditRef(n.messageId) }, 'processing event');
     if (!shouldProcessShadowLocation(this.config, n.locationId)) {
       this.logger.info({ kind, locationRef: auditRef(n.locationId), eventKey: n.eventKey }, 'event skipped by shadow location scope');
@@ -140,6 +146,7 @@ export class EventProcessor {
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length }, 'context built');
     const effectiveMessage = triggerMessage ?? context.triggerMessage;
     if (effectiveMessage?.direction && effectiveMessage.direction !== 'inbound') return;
+    if (isBeforeDeliveryCutover(this.config, effectiveMessage?.dateAdded)) return;
     const effectiveMessageId = inputMessageId ?? effectiveMessage?.id;
 
     let claimed = false;
@@ -219,6 +226,7 @@ export class EventProcessor {
     if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'transcript', context.contactId)) return;
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length, callType }, 'context built');
     callMessage ??= [...context.recentMessages].reverse().find(isCallMessage) ?? null;
+    if (isBeforeDeliveryCutover(this.config, n.eventTimestamp ?? callMessage?.dateAdded ?? voiceAiLog?.createdAt)) return;
     let messageId = inputMessageId ?? stringValue(voiceAiLog?.messageId) ?? callMessage?.id;
 
     const analysisMessageId = n.voiceAiCallId ?? messageId ?? n.eventKey;

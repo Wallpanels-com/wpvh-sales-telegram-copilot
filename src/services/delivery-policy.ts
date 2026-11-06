@@ -34,6 +34,12 @@ export function isEventAfterShadowStart(config: AppConfig, eventCreatedAt?: stri
   return Number.isFinite(eventTime) && eventTime >= Date.parse(config.SHADOW_TEST_STARTED_AT);
 }
 
+export function isBeforeDeliveryCutover(config: AppConfig, timestamp?: string): boolean {
+  if (!config.DEFERRED_DELIVERY_RESUME_AT || !timestamp) return false;
+  const time = Date.parse(timestamp);
+  return Number.isFinite(time) && time < Date.parse(config.DEFERRED_DELIVERY_RESUME_AT);
+}
+
 export function shadowSalesLabel(config: AppConfig, assignedGhlUserId?: string, assignedSalesName?: string): string {
   return (assignedGhlUserId ? config.shadowTestSalesLabels.get(assignedGhlUserId) : undefined)
     || assignedSalesName?.trim()

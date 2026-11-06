@@ -62,7 +62,7 @@ export function normalizeWebhook(kind: WebhookKind, payload: any): NormalizedWeb
   const explicitWebhookId = first(raw, 'webhookId', 'webhook_id', 'eventId', 'event_id');
   const legacyWebhookId = kind === 'task_reminder' || kind === 'appointment_reminder' ? undefined : first(raw, 'id');
   const webhookId = explicitWebhookId ?? legacyWebhookId;
-  const timestamp = first(raw, 'timestamp', 'createdAt', 'dateAdded', 'eventTime');
+  const timestamp = first(raw, 'eventTimestamp', 'timestamp', 'createdAt', 'dateAdded', 'eventTime');
 
   const reminderBasis = kind === 'task_reminder'
     ? ['task', locationId, contactId, taskId, dueDate, taskTitle, taskBody].join('|')
