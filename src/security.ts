@@ -36,7 +36,11 @@ export function redactUrl(rawUrl: string): string {
 
 export function safeErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
-  return redactSecrets(raw).slice(0, 500);
+  const cause = error instanceof Error ? error.cause as { code?: unknown } | undefined : undefined;
+  const code = String(cause?.code ?? '');
+  const safeNetworkCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET']);
+  return redactSecrets(safeNetworkCodes.has(code) ? `${raw} (${code})` : raw).slice(0, 500);
 }
 
 export function auditRef(value?: string | null): string | null {

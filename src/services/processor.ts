@@ -16,7 +16,7 @@ import {
   shouldProcessAssignedSales,
   shouldProcessShadowLocation
 } from './delivery-policy.js';
-import { GhlClient } from './ghl.js';
+import { GhlApiError, GhlClient } from './ghl.js';
 import { resolveRecipients } from './recipients.js';
 import { deliveryFailurePolicy, TelegramClient } from './telegram.js';
 import { normalizeWebhook } from './webhook-normalizer.js';
@@ -71,6 +71,11 @@ export class EventProcessor {
           await this.processEvent(String(event.kind) as WebhookKind, event.payload, String(event.source));
           await this.db.markEventDone(String(event.id));
         } catch (error: any) {
+          if (error instanceof GhlApiError && error.reason === 'contact_unavailable') {
+            await this.db.markEventDiscarded(String(event.id), 'Contact unavailable in HighLevel; not retried');
+            this.logger.info({ eventId: event.id, kind: event.kind }, 'event discarded: contact unavailable in HighLevel');
+            continue;
+          }
           this.logger.error({ eventId: event.id, kind: event.kind, error: safeErrorMessage(error) }, 'event processing failed');
           const rateLimit = error instanceof AiRateLimitError ? error : null;
           await this.db.markEventFailed(String(event.id), safeErrorMessage(error), Number(event.attempts ?? 1), {

@@ -1,6 +1,13 @@
 import type { AppConfig } from '../config.js';
 import type { BrandKey, GhlAppointment, GhlMessage, GhlOpportunity, GhlTask } from '../types.js';
 
+export class GhlApiError extends Error {
+  constructor(readonly status: number, readonly reason: 'contact_unavailable' | 'request_rejected', readonly operation: string) {
+    super(`HighLevel GET failed: ${status} (${reason}; ${operation})`);
+    this.name = 'GhlApiError';
+  }
+}
+
 export class GhlClient {
   private readonly pipelineCache = new Map<BrandKey, {
     expiresAt: number;
@@ -269,9 +276,13 @@ export class GhlClient {
     }
 
     if (!res.ok) {
-      const err = new Error(`HighLevel GET failed: ${res.status}`) as Error & { status?: number };
-      err.status = res.status;
-      throw err;
+      // Classify only an explicit CRM response; a generic 400, timeout or
+      // authorization failure must never be mistaken for a deleted contact.
+      const contactPath = /^\/contacts\/[^/]+(?:\/tasks(?:\/[^/]+)?)?$/.test(path);
+      const unavailable = contactPath && [400, 404].includes(res.status)
+        && /contact not found/i.test(String(data?.message ?? data?.error ?? ''));
+      const operation = path.split('/').filter(Boolean)[0] ?? 'unknown';
+      throw new GhlApiError(res.status, unavailable ? 'contact_unavailable' : 'request_rejected', operation);
     }
     return data;
   }
