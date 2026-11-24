@@ -51,6 +51,8 @@ export type GhlOpportunity = {
 };
 
 export type GhlTask = {
+  createdAt?: string;
+  dateAdded?: string;
   id: string;
   title?: string;
   body?: string;

@@ -2,13 +2,13 @@ import { config as loadDotenv } from 'dotenv';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Pool } from '@neondatabase/serverless';
+import { postgresPool } from '../src/postgres.js';
 
 loadDotenv({ path: ['.env.local', '.env'], quiet: true });
 
 const url = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
 if (!url) throw new Error('DATABASE_URL_UNPOOLED or DATABASE_URL is required');
-const pool = new Pool({ connectionString: url, max: 1 });
+const pool = postgresPool(url, 1);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.resolve(here, '../../migrations');
 

@@ -29,3 +29,4 @@ for (const adminId of config.adminTelegramUserIds) {
 }
 
 console.log(`Sales mappings synchronized: sales=${seededSalesCount}, newAdmins=${seededAdminCount}`);
+await db.close();

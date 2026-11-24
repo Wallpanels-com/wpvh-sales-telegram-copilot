@@ -17,6 +17,7 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
 
   DATABASE_URL: z.string().min(1),
+  COPILOT_FRESH_START: boolFromEnv.default(false),
 
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_USERNAME: z.string().optional().default(''),

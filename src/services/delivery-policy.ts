@@ -40,6 +40,11 @@ export function isBeforeDeliveryCutover(config: AppConfig, timestamp?: string): 
   return Number.isFinite(time) && time < Date.parse(config.DEFERRED_DELIVERY_RESUME_AT);
 }
 
+export function sourceTimeAllowed(config: AppConfig, timestamp?: string): boolean {
+  if (!config.COPILOT_FRESH_START) return true;
+  return Boolean(timestamp && Date.parse(timestamp) >= Date.parse(config.DEFERRED_DELIVERY_RESUME_AT));
+}
+
 export function shadowSalesLabel(config: AppConfig, assignedGhlUserId?: string, assignedSalesName?: string): string {
   return (assignedGhlUserId ? config.shadowTestSalesLabels.get(assignedGhlUserId) : undefined)
     || assignedSalesName?.trim()

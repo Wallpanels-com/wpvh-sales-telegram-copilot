@@ -9,12 +9,12 @@ Production-oriented TypeScript backend for a Telegram Sales Copilot on top of Go
 - Builds CRM context from Contact, Opportunity, Pipeline/Stage, assigned Sales, 10–15 recent relevant messages, open Tasks, the nearest Appointment and structured call memory.
 - Uses the configured AI provider to create a short suggested reply; it **never sends the reply to the client**.
 - Telegram buttons: Copy reply, Shorter, Friendlier, Rewrite, Open in HighLevel.
-- Sends each new HighLevel call transcript to AI once, stores its structured summary in Neon, and reuses that summary instead of resending the transcript.
+- Sends each new HighLevel call transcript to AI once, stores its structured summary in PostgreSQL, and reuses that summary instead of resending the transcript.
 - `/today` shows due/overdue tasks and today's calendar events from assigned open Opportunities.
 - Daily briefing at configured work start.
 - Off-hours client notifications are deferred to the next work start.
 - Optional HighLevel Task Reminder and appointment-prep webhook endpoints.
-- Durable webhook queue + retries + deduplication in Neon.
+- Durable webhook queue + retries + deduplication in PostgreSQL.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ HighLevel Customer Reply / Call Transcript
               ↓ webhook (preferred)
         Railway / Fastify
               ↓
-       Durable Neon queue
+       Durable PostgreSQL queue
               ↓
        HighLevel GET context
               ↓
@@ -37,7 +37,7 @@ Read-only polling is a fallback:
 
 ```text
 HighLevel GET message export every ~60s
-       ↓ dedupe in Neon
+       ↓ dedupe in PostgreSQL
 same processing pipeline
 ```
 
@@ -71,13 +71,11 @@ npm run telegram:set-webhook
 
 Then configure HighLevel workflow webhooks using `docs/HIGHLEVEL_WEBHOOK_SETUP.md`.
 
-## Neon
+## Supabase PostgreSQL
 
-Neon is PostgreSQL. This project needs one primary secret:
-
-`DATABASE_URL`
-
-Use the pooled connection string from Neon for the Railway runtime. There is no Supabase-style public/anon key requirement for this backend.
+Railway uses the private `copilot` schema in `wpvh-sales-control`.
+`DATABASE_URL` uses the runtime role and `DATABASE_URL_UNPOOLED` uses the migration role on the session pooler.
+`DATABASE_CA_CERT` contains the trusted Supabase CA certificate. With `COPILOT_FRESH_START=true`, the first startup saves the source-event cutoff in PostgreSQL and subsequent deployments reuse it.
 
 ## Sales mapping
 

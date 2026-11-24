@@ -1,7 +1,7 @@
 # Deployment checklist
 
 1. Create corporate GitHub repository `wpvh-sales-telegram-copilot`.
-2. Create Neon project and copy its `DATABASE_URL`.
+2. Configure the runtime and migration PostgreSQL roles for the private Supabase schema as described in the README.
 3. Create Telegram bot in BotFather.
 4. Fill Railway environment variables from `.env.example` using the local private Word access document. Never commit the document.
 5. Connect Railway service to the GitHub repository.

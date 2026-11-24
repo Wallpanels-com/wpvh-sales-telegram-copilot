@@ -3,11 +3,32 @@ import { GhlPoller } from '../src/services/poller.js';
 import { EventProcessor } from '../src/services/processor.js';
 import { canonicalWebhookPayload, normalizeWebhook } from '../src/services/webhook-normalizer.js';
 
+import { sourceTimeAllowed } from '../src/services/delivery-policy.js';
+
 const cutoff = '2026-11-06T15:00:00.000Z';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 afterEach(() => vi.useRealTimers());
 
 describe('safe delivery resumption', () => {
+  it('requires a verifiable fresh source time after a clean database start', () => {
+    const config = { COPILOT_FRESH_START: true, DEFERRED_DELIVERY_RESUME_AT: cutoff } as any;
+    for (const time of [undefined, '', 'invalid', '2026-11-06T14:59:59.999Z']) {
+      expect(sourceTimeAllowed(config, time)).toBe(false);
+    }
+    expect(sourceTimeAllowed(config, cutoff)).toBe(true);
+    expect(sourceTimeAllowed(config, '2026-11-06T16:00:00Z')).toBe(true);
+  });
+
+  it.each(['task_reminder', 'appointment_reminder'] as const)('drops a replayed %s before resolving its current CRM record', async kind => {
+    const context = { build: vi.fn() };
+    const telegram = { sendMessage: vi.fn() };
+    const processor = new EventProcessor({ COPILOT_FRESH_START: true, DEFERRED_DELIVERY_RESUME_AT: cutoff } as any,
+      {} as any, {} as any, telegram as any, {} as any, context as any, logger);
+    await processor.processEvent(kind, { eventTimestamp: '2026-10-25T15:00:00Z' });
+    expect(context.build).not.toHaveBeenCalled();
+    expect(telegram.sendMessage).not.toHaveBeenCalled();
+  });
+
   it('does not lose source event time when storing the canonical queue payload', () => {
     const original = normalizeWebhook('customer_replied', { timestamp: cutoff, messageId: 'new-message' });
     expect(normalizeWebhook('customer_replied', canonicalWebhookPayload(original)).eventTimestamp).toBe(cutoff);

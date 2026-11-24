@@ -10,6 +10,7 @@ import { ContextService } from './context.js';
 import {
   canDeliverToTelegram,
   isBeforeDeliveryCutover,
+  sourceTimeAllowed,
   isEventAfterShadowStart,
   isShadowTestActive,
   prependShadowTestPrefix,
@@ -92,8 +93,7 @@ export class EventProcessor {
 
   async processEvent(kind: WebhookKind, payload: any, source = 'unknown') {
     const n = normalizeWebhook(kind, payload);
-    if (['customer_replied', 'poll_message', 'transcript_generated', 'poll_call'].includes(kind)
-      && isBeforeDeliveryCutover(this.config, n.eventTimestamp)) {
+    if (isBeforeDeliveryCutover(this.config, n.eventTimestamp)) {
       this.logger.info({ kind, eventKey: n.eventKey }, 'event skipped before delivery cutover');
       return;
     }
@@ -153,7 +153,8 @@ export class EventProcessor {
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length }, 'context built');
     const effectiveMessage = triggerMessage ?? context.triggerMessage;
     if (effectiveMessage?.direction && effectiveMessage.direction !== 'inbound') return;
-    if (isBeforeDeliveryCutover(this.config, effectiveMessage?.dateAdded)) return;
+    if (isBeforeDeliveryCutover(this.config, effectiveMessage?.dateAdded)
+      || !sourceTimeAllowed(this.config, effectiveMessage?.dateAdded)) return;
     if (effectiveMessage && await this.skipEmojiOnlyReply(effectiveMessage, locationId, n.eventKey)) return;
     const effectiveMessageId = inputMessageId ?? effectiveMessage?.id;
 
@@ -234,7 +235,8 @@ export class EventProcessor {
     if (!this.shouldHandleAssignedSales(context.assignedGhlUserId, 'transcript', context.contactId)) return;
     this.logger.info({ eventKey: n.eventKey, contactRef: auditRef(context.contactId), recentMessages: context.recentMessages.length, callType }, 'context built');
     callMessage ??= [...context.recentMessages].reverse().find(isCallMessage) ?? null;
-    if (isBeforeDeliveryCutover(this.config, n.eventTimestamp ?? callMessage?.dateAdded ?? voiceAiLog?.createdAt)) return;
+    const callTime = voiceAiLog?.createdAt ?? voiceAiLog?.dateAdded ?? voiceAiLog?.startedAt ?? callMessage?.dateAdded;
+    if (isBeforeDeliveryCutover(this.config, callTime)) return;
     let messageId = inputMessageId ?? stringValue(voiceAiLog?.messageId) ?? callMessage?.id;
 
     const analysisMessageId = n.voiceAiCallId ?? messageId ?? n.eventKey;
@@ -266,6 +268,13 @@ export class EventProcessor {
       transcript ||= n.transcript;
       if (!transcript?.trim()) throw new Error('transcript not available yet');
 
+      const resolvedCallTime = voiceAiLog
+        ? voiceAiLog.createdAt ?? voiceAiLog.dateAdded ?? voiceAiLog.startedAt
+        : callMessage?.dateAdded;
+      if (!sourceTimeAllowed(this.config, resolvedCallTime)) {
+        await this.db.unmarkMessageProcessed(locationId, processedKey);
+        return;
+      }
       const analysis = await this.ai.analyzeCall({
         contactName: context.contactName,
         brandLabel: context.brandLabel,
@@ -343,6 +352,8 @@ export class EventProcessor {
     const { recipients, assignedSales } = await resolveRecipients(this.config, this.db, brand, assignedGhlUserId);
     const taskTitle = task.title ?? 'Task due';
     const dueDate = task.dueDate ?? n.dueDate;
+    if (!sourceTimeAllowed(this.config, n.eventTimestamp ?? task.createdAt ?? task.dateAdded)
+      || isBeforeDeliveryCutover(this.config, dueDate)) return;
     const overdue = isPastDue(dueDate);
     const brief = buildTaskBrief(context);
     const card = buildTaskReminderCard(this.config, this.ghl, {
@@ -392,6 +403,11 @@ export class EventProcessor {
     }
     const appointmentStart = appointment?.startTime ?? n.appointmentStart ?? context.nextAppointment?.startTime;
     if (!appointmentStart) throw new Error('appointment reminder missing current appointment start time');
+    // The workflow fires one hour before the appointment.
+    const reminderTime = Date.parse(appointmentStart) - 60 * 60 * 1000;
+    const scheduledAt = Number.isFinite(reminderTime) ? new Date(reminderTime).toISOString() : undefined;
+    if (!sourceTimeAllowed(this.config, n.eventTimestamp ?? scheduledAt)
+      || isBeforeDeliveryCutover(this.config, appointmentStart)) return;
     const calendarId = appointment?.calendarId ?? n.calendarId;
     let calendarName = n.calendarName;
     if (calendarId) {

@@ -1,14 +1,30 @@
-import { neon } from '@neondatabase/serverless';
+import { postgresPool } from './postgres.js';
 import type { AppConfig } from './config.js';
 import type { BrandKey, CallAnalysis, SalesUser, WebhookKind } from './types.js';
 
 export type Db = ReturnType<typeof createDb>;
 
 export function createDb(config: AppConfig) {
-  const sql = neon(config.DATABASE_URL);
+  const pool = postgresPool(config.DATABASE_URL, 5);
+  pool.on('error', () => console.error('Idle PostgreSQL connection closed'));
+  async function sql(parts: TemplateStringsArray, ...values: unknown[]) {
+    const query = parts.reduce((text, part, index) => text + '$' + index + part);
+    return (await pool.query(query, values)).rows;
+  }
 
   return {
     sql,
+    close: () => pool.end(),
+
+    async firstDeliveryStart(): Promise<string> {
+      const key = 'delivery:first-start:v1';
+      await sql`INSERT INTO poll_checkpoints (checkpoint_key, checkpoint_value)
+        VALUES (${key}, to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+        ON CONFLICT (checkpoint_key) DO NOTHING`;
+      const [row] = await sql`SELECT checkpoint_value FROM poll_checkpoints WHERE checkpoint_key = ${key}`;
+      if (!Number.isFinite(Date.parse(row?.checkpoint_value))) throw new Error('Invalid delivery start time');
+      return row.checkpoint_value;
+    },
 
     async health() {
       const rows = await sql`SELECT 1 AS ok`;

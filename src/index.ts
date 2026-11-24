@@ -93,6 +93,13 @@ app.get('/', async () => ({
 }));
 
 app.addHook('onReady', async () => {
+  if (config.COPILOT_FRESH_START) {
+    const startedAt = await db.firstDeliveryStart();
+    if (!config.DEFERRED_DELIVERY_RESUME_AT || Date.parse(startedAt) > Date.parse(config.DEFERRED_DELIVERY_RESUME_AT)) {
+      config.DEFERRED_DELIVERY_RESUME_AT = startedAt;
+    }
+    app.log.info({ startedAt: config.DEFERRED_DELIVERY_RESUME_AT }, 'fresh event delivery boundary active');
+  }
   if (config.DEFERRED_DELIVERY_RESUME_AT) {
     await db.holdDeferredBefore(config.DEFERRED_DELIVERY_RESUME_AT);
     await db.holdEventsBefore(config.DEFERRED_DELIVERY_RESUME_AT);

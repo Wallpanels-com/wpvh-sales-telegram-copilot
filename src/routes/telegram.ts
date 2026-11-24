@@ -45,6 +45,10 @@ export async function registerTelegramRoute(
     const mappedUser = await db.getSalesByTelegramId(actorId);
     const knownActor = Boolean(mappedUser || config.adminTelegramUserIds.includes(actorId)
       || (config.SHADOW_TEST_ENABLED && actorId === config.SHADOW_TEST_RECIPIENT_TELEGRAM_ID));
+    if (config.COPILOT_FRESH_START && update.message &&
+        !(Number(update.message.date) >= Math.ceil(Date.parse(config.DEFERRED_DELIVERY_RESUME_AT) / 1000))) {
+      return reply.code(200).send({ ok: true });
+    }
     if (!knownActor || !canDeliverToTelegram(config, actorId) || !actorLimiter.allow(actorId)) {
       return reply.code(200).send({ ok: true });
     }
